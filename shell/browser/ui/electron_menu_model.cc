@@ -10,7 +10,7 @@
 
 namespace electron {
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 ElectronMenuModel::SharingItem::SharingItem() = default;
 ElectronMenuModel::SharingItem::SharingItem(SharingItem&&) = default;
 ElectronMenuModel::SharingItem::~SharingItem() = default;
@@ -87,7 +87,7 @@ bool ElectronMenuModel::WorksWhenHiddenAt(int index) const {
   return true;
 }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 bool ElectronMenuModel::GetSharingItemAt(int index, SharingItem* item) const {
   if (delegate_)
     return delegate_->GetSharingItemForCommandId(GetCommandIdAt(index), item);
@@ -98,7 +98,7 @@ void ElectronMenuModel::SetSharingItem(SharingItem item) {
   sharing_item_.emplace(std::move(item));
 }
 
-const base::Optional<ElectronMenuModel::SharingItem>&
+const absl::optional<ElectronMenuModel::SharingItem>&
 ElectronMenuModel::GetSharingItem() const {
   return sharing_item_;
 }

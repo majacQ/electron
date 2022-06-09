@@ -7,16 +7,16 @@
 #include <memory>
 #include <utility>
 
-#include "base/optional.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
 
 #include <psapi.h>
 #include "base/win/win_util.h"
 #endif
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include <mach/mach.h>
 #include "base/process/port_provider_mac.h"
 #include "content/public/browser/browser_child_process_host.h"
@@ -34,19 +34,19 @@ mach_port_t TaskForPid(pid_t pid) {
   return task;
 }
 
-base::Optional<mach_task_basic_info_data_t> GetTaskInfo(mach_port_t task) {
+absl::optional<mach_task_basic_info_data_t> GetTaskInfo(mach_port_t task) {
   if (task == MACH_PORT_NULL)
-    return base::nullopt;
+    return absl::nullopt;
   mach_task_basic_info_data_t info = {};
   mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
   kern_return_t kr = task_info(task, MACH_TASK_BASIC_INFO,
                                reinterpret_cast<task_info_t>(&info), &count);
-  return (kr == KERN_SUCCESS) ? base::make_optional(info) : base::nullopt;
+  return (kr == KERN_SUCCESS) ? absl::make_optional(info) : absl::nullopt;
 }
 
 }  // namespace
 
-#endif  // defined(OS_MAC)
+#endif  // BUILDFLAG(IS_MAC)
 
 namespace electron {
 
@@ -60,7 +60,7 @@ ProcessMetric::ProcessMetric(int type,
   this->service_name = service_name;
   this->name = name;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   HANDLE duplicate_handle = INVALID_HANDLE_VALUE;
   ::DuplicateHandle(::GetCurrentProcess(), handle, ::GetCurrentProcess(),
                     &duplicate_handle, 0, false, DUPLICATE_SAME_ACCESS);
@@ -72,7 +72,7 @@ ProcessMetric::ProcessMetric(int type,
 
 ProcessMetric::~ProcessMetric() = default;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 
 ProcessMemoryInfo ProcessMetric::GetMemoryInfo() const {
   ProcessMemoryInfo result;
@@ -146,7 +146,7 @@ bool ProcessMetric::IsSandboxed(ProcessIntegrityLevel integrity_level) {
          integrity_level < ProcessIntegrityLevel::kMedium;
 }
 
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_MAC)
 
 ProcessMemoryInfo ProcessMetric::GetMemoryInfo() const {
   ProcessMemoryInfo result;
@@ -167,6 +167,6 @@ bool ProcessMetric::IsSandboxed() const {
 #endif
 }
 
-#endif  // defined(OS_MAC)
+#endif  // BUILDFLAG(IS_MAC)
 
 }  // namespace electron

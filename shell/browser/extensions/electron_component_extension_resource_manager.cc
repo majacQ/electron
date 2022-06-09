@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+#include "base/containers/contains.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/stl_util.h"
@@ -35,18 +36,18 @@ ElectronComponentExtensionResourceManager::
   base::Value pdf_strings(base::Value::Type::DICTIONARY);
   pdf_extension_util::AddStrings(
       pdf_extension_util::PdfViewerContext::kPdfViewer, &pdf_strings);
-  pdf_extension_util::AddAdditionalData(&pdf_strings);
+  pdf_extension_util::AddAdditionalData(true, &pdf_strings);
 
   ui::TemplateReplacements pdf_viewer_replacements;
-  ui::TemplateReplacementsFromDictionaryValue(
-      base::Value::AsDictionaryValue(pdf_strings), &pdf_viewer_replacements);
+  ui::TemplateReplacementsFromDictionaryValue(pdf_strings.GetDict(),
+                                              &pdf_viewer_replacements);
   extension_template_replacements_[extension_misc::kPdfExtensionId] =
       std::move(pdf_viewer_replacements);
 #endif
 }
 
 ElectronComponentExtensionResourceManager::
-    ~ElectronComponentExtensionResourceManager() {}
+    ~ElectronComponentExtensionResourceManager() = default;
 
 bool ElectronComponentExtensionResourceManager::IsComponentExtensionResource(
     const base::FilePath& extension_path,

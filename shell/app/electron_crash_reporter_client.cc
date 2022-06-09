@@ -25,15 +25,15 @@
 #include "electron/electron_version.h"
 #include "shell/common/electron_paths.h"
 
-#if defined(OS_POSIX) && !defined(OS_MAC)
+#if BUILDFLAG(IS_POSIX) && !BUILDFLAG(IS_MAC)
 #include "components/version_info/version_info_values.h"
 #endif
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
 #include "base/debug/dump_without_crashing.h"
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/strings/string_util_win.h"
 #endif
 
@@ -52,7 +52,7 @@ void ElectronCrashReporterClient::Create() {
 
   // By setting the BREAKPAD_DUMP_LOCATION environment variable, an alternate
   // location to write crash dumps can be set.
-  std::unique_ptr<base::Environment> env(base::Environment::Create());
+  auto env = base::Environment::Create();
   std::string alternate_crash_dump_location;
   base::FilePath crash_dumps_dir_path;
   if (env->GetVar("BREAKPAD_DUMP_LOCATION", &alternate_crash_dump_location)) {
@@ -92,11 +92,11 @@ void ElectronCrashReporterClient::SetGlobalAnnotations(
   global_annotations_ = annotations;
 }
 
-ElectronCrashReporterClient::ElectronCrashReporterClient() {}
+ElectronCrashReporterClient::ElectronCrashReporterClient() = default;
 
-ElectronCrashReporterClient::~ElectronCrashReporterClient() {}
+ElectronCrashReporterClient::~ElectronCrashReporterClient() = default;
 
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
 void ElectronCrashReporterClient::SetCrashReporterClientIdFromGUID(
     const std::string& client_guid) {
   crash_keys::SetMetricsClientIdFromGUID(client_guid);
@@ -127,7 +127,7 @@ base::FilePath ElectronCrashReporterClient::GetReporterLogFilename() {
 }
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 void ElectronCrashReporterClient::GetProductNameAndVersion(
     const std::wstring& exe_path,
     std::wstring* product_name,
@@ -139,7 +139,7 @@ void ElectronCrashReporterClient::GetProductNameAndVersion(
 }
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 bool ElectronCrashReporterClient::GetCrashDumpLocation(
     std::wstring* crash_dir_str) {
   base::FilePath crash_dir;
@@ -153,6 +153,9 @@ bool ElectronCrashReporterClient::GetCrashDumpLocation(
     base::FilePath* crash_dir) {
   bool result = base::PathService::Get(electron::DIR_CRASH_DUMPS, crash_dir);
   {
+    // If the DIR_CRASH_DUMPS path is overridden with
+    // app.setPath('crashDumps', ...) then the directory might not have been
+    // created.
     base::ThreadRestrictions::ScopedAllowIO allow_io;
     if (result && !base::PathExists(*crash_dir)) {
       return base::CreateDirectory(*crash_dir);
@@ -162,13 +165,6 @@ bool ElectronCrashReporterClient::GetCrashDumpLocation(
 }
 #endif
 
-#if defined(OS_MAC) || defined(OS_LINUX)
-bool ElectronCrashReporterClient::GetCrashMetricsLocation(
-    base::FilePath* metrics_dir) {
-  return base::PathService::Get(electron::DIR_USER_DATA, metrics_dir);
-}
-#endif  // OS_MAC || OS_LINUX
-
 bool ElectronCrashReporterClient::IsRunningUnattended() {
   return !collect_stats_consent_;
 }
@@ -177,7 +173,7 @@ bool ElectronCrashReporterClient::GetCollectStatsConsent() {
   return collect_stats_consent_;
 }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 bool ElectronCrashReporterClient::ReportingIsEnforcedByPolicy(
     bool* breakpad_enabled) {
   return false;
@@ -199,11 +195,11 @@ void ElectronCrashReporterClient::GetProcessSimpleAnnotations(
   (*annotations)["ver"] = ELECTRON_VERSION_STRING;
 }
 
-#if defined(OS_LINUX) || defined(OS_MAC)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC)
 bool ElectronCrashReporterClient::ShouldMonitorCrashHandlerExpensively() {
   return false;
 }
-#endif  // OS_LINUX
+#endif
 
 std::string ElectronCrashReporterClient::GetUploadUrl() {
   return upload_url_;

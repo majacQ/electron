@@ -30,11 +30,11 @@
 #include "shell/common/node_bindings.h"
 #include "shell/common/node_includes.h"
 
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
 #include "components/crash/core/app/breakpad_linux.h"
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "chrome/child/v8_crashpad_support_win.h"
 #endif
 
@@ -49,7 +49,7 @@ namespace {
 
 // Initialize Node.js cli options to pass to Node.js
 // See https://nodejs.org/api/cli.html#cli_options
-void SetNodeCliFlags() {
+int SetNodeCliFlags() {
   // Options that are unilaterally disallowed
   const std::unordered_set<base::StringPiece, base::StringPieceHash>
       disallowed = {"--openssl-config", "--use-bundled-ca", "--use-openssl-ca",
@@ -65,7 +65,7 @@ void SetNodeCliFlags() {
   args.emplace_back("electron");
 
   for (const auto& arg : argv) {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     const auto& option = base::WideToUTF8(arg);
 #else
     const auto& option = arg;
@@ -74,6 +74,10 @@ void SetNodeCliFlags() {
     if (disallowed.count(stripped) != 0) {
       LOG(ERROR) << "The Node.js cli flag " << stripped
                  << " is not supported in Electron";
+      // Node.js returns 9 from ProcessGlobalArgs for any errors encountered
+      // when setting up cli flags and env vars. Since we're outlawing these
+      // flags (making them errors) return 9 here for consistency.
+      return 9;
     } else {
       args.push_back(option);
     }
@@ -83,7 +87,8 @@ void SetNodeCliFlags() {
 
   // Node.js itself will output parsing errors to
   // console so we don't need to handle that ourselves
-  ProcessGlobalArgs(&args, nullptr, &errors, node::kDisallowedInEnvironment);
+  return ProcessGlobalArgs(&args, nullptr, &errors,
+                           node::kDisallowedInEnvironment);
 }
 
 #if defined(MAS_BUILD)
@@ -95,7 +100,7 @@ void ClearCrashKeyStub(const std::string& key) {}
 
 namespace electron {
 
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
 void CrashReporterStart(gin_helper::Dictionary options) {
   std::string submit_url;
   bool upload_to_server = true;
@@ -135,7 +140,7 @@ v8::Local<v8::Value> GetParameters(v8::Isolate* isolate) {
 int NodeMain(int argc, char* argv[]) {
   base::CommandLine::Init(argc, argv);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   v8_crashpad_support::SetUp();
 #endif
 
@@ -143,7 +148,7 @@ int NodeMain(int argc, char* argv[]) {
   ElectronCrashReporterClient::Create();
 #endif
 
-#if defined(OS_WIN) || (defined(OS_MAC) && !defined(MAS_BUILD))
+#if BUILDFLAG(IS_WIN) || (BUILDFLAG(IS_MAC) && !defined(MAS_BUILD))
   crash_reporter::InitializeCrashpad(false, "node");
 #endif
 
@@ -156,9 +161,8 @@ int NodeMain(int argc, char* argv[]) {
   int exit_code = 1;
   {
     // Feed gin::PerIsolateData with a task runner.
-    argv = uv_setup_args(argc, argv);
     uv_loop_t* loop = uv_default_loop();
-    scoped_refptr<UvTaskRunner> uv_task_runner(new UvTaskRunner(loop));
+    auto uv_task_runner = base::MakeRefCounted<UvTaskRunner>(loop);
     base::ThreadTaskRunnerHandle handle(uv_task_runner);
 
     // Initialize feature list.
@@ -170,14 +174,19 @@ int NodeMain(int argc, char* argv[]) {
     NodeBindings::RegisterBuiltinModules();
 
     // Parse and set Node.js cli flags.
-    SetNodeCliFlags();
+    int flags_exit_code = SetNodeCliFlags();
+    if (flags_exit_code != 0)
+      exit(flags_exit_code);
 
-    int exec_argc;
-    const char** exec_argv;
-    node::Init(&argc, const_cast<const char**>(argv), &exec_argc, &exec_argv);
+    node::InitializationSettingsFlags flags = node::kRunPlatformInit;
+    node::InitializationResult result =
+        node::InitializeOncePerProcess(argc, argv, flags);
+
+    if (result.early_return)
+      exit(result.exit_code);
 
     gin::V8Initializer::LoadV8Snapshot(
-        gin::V8Initializer::V8SnapshotFileType::kWithAdditionalContext);
+        gin::V8SnapshotFileType::kWithAdditionalContext);
 
     // V8 requires a task scheduler.
     base::ThreadPoolInstance::CreateAndStartWithDefaultParams("Electron");
@@ -201,12 +210,12 @@ int NodeMain(int argc, char* argv[]) {
       isolate_data = node::CreateIsolateData(isolate, loop, gin_env.platform());
       CHECK_NE(nullptr, isolate_data);
 
-      std::vector<std::string> args(argv, argv + argc);  // NOLINT
-      std::vector<std::string> exec_args(exec_argv,
-                                         exec_argv + exec_argc);  // NOLINT
-      env = node::CreateEnvironment(isolate_data, gin_env.context(), args,
-                                    exec_args);
-      CHECK_NOT_NULL(env);
+      uint64_t flags = node::EnvironmentFlags::kDefaultFlags |
+                       node::EnvironmentFlags::kHideConsoleWindows;
+      env = node::CreateEnvironment(
+          isolate_data, gin_env.context(), result.args, result.exec_args,
+          static_cast<node::EnvironmentFlags::Flags>(flags));
+      CHECK_NE(nullptr, env);
 
       node::IsolateSettings is;
       node::SetIsolateUpForNode(isolate, is);
@@ -216,7 +225,7 @@ int NodeMain(int argc, char* argv[]) {
 
       // Setup process.crashReporter in child node processes
       gin_helper::Dictionary reporter = gin::Dictionary::CreateEmpty(isolate);
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
       reporter.SetMethod("start", &CrashReporterStart);
 #endif
 
@@ -240,7 +249,7 @@ int NodeMain(int argc, char* argv[]) {
     }
 
     v8::HandleScope scope(isolate);
-    node::LoadEnvironment(env);
+    node::LoadEnvironment(env, node::StartExecutionCallback{});
 
     env->set_trace_sync_io(env->options()->trace_sync_io);
 

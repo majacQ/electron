@@ -13,7 +13,7 @@ const fail = '✗'.red;
 
 const args = require('minimist')(process.argv, {
   string: ['runners', 'target'],
-  boolean: ['buildNativeTests'],
+  boolean: ['buildNativeTests', 'runTestFilesSeperately'],
   unknown: arg => unknownFlags.push(arg)
 });
 
@@ -41,8 +41,8 @@ const runners = new Map([
 const specHashPath = path.resolve(__dirname, '../spec/.hash');
 
 let runnersToRun = null;
-if (args.runners) {
-  runnersToRun = args.runners.split(',');
+if (args.runners !== undefined) {
+  runnersToRun = args.runners.split(',').filter(value => value);
   if (!runnersToRun.every(r => [...runners.keys()].includes(r))) {
     console.log(`${fail} ${runnersToRun} must be a subset of [${[...runners.keys()].join(' | ')}]`);
     process.exit(1);
@@ -123,24 +123,55 @@ async function runElectronTests () {
   }
 }
 
-async function runRemoteBasedElectronTests () {
+async function runTestUsingElectron (specDir, testName) {
   let exe = path.resolve(BASE, utils.getElectronExec());
-  const runnerArgs = ['electron/spec', ...unknownArgs.slice(2)];
+  const runnerArgs = [`electron/${specDir}`, ...unknownArgs.slice(2)];
   if (process.platform === 'linux') {
     runnerArgs.unshift(path.resolve(__dirname, 'dbus_mock.py'), exe);
-    exe = 'python';
+    exe = 'python3';
   }
-
-  const { status } = childProcess.spawnSync(exe, runnerArgs, {
+  const { status, signal } = childProcess.spawnSync(exe, runnerArgs, {
     cwd: path.resolve(__dirname, '../..'),
     stdio: 'inherit'
   });
   if (status !== 0) {
-    const textStatus = process.platform === 'win32' ? `0x${status.toString(16)}` : status.toString();
-    console.log(`${fail} Electron tests failed with code ${textStatus}.`);
+    if (status) {
+      const textStatus = process.platform === 'win32' ? `0x${status.toString(16)}` : status.toString();
+      console.log(`${fail} Electron tests failed with code ${textStatus}.`);
+    } else {
+      console.log(`${fail} Electron tests failed with kill signal ${signal}.`);
+    }
     process.exit(1);
   }
-  console.log(`${pass} Electron remote process tests passed.`);
+  console.log(`${pass} Electron ${testName} process tests passed.`);
+}
+
+const specFilter = (file) => {
+  if (!/-spec\.[tj]s$/.test(file)) {
+    return false;
+  } else {
+    return true;
+  }
+};
+
+async function runTests (specDir, testName) {
+  if (args.runTestFilesSeperately) {
+    const getFiles = require('../spec/static/get-files');
+    const testFiles = await getFiles(path.resolve(__dirname, `../${specDir}`), { filter: specFilter });
+    const baseElectronDir = path.resolve(__dirname, '..');
+    unknownArgs.splice(unknownArgs.length, 0, '--files', '');
+    testFiles.sort().forEach(async (file) => {
+      unknownArgs.splice((unknownArgs.length - 1), 1, path.relative(baseElectronDir, file));
+      console.log(`Running tests for ${unknownArgs[unknownArgs.length - 1]}`);
+      await runTestUsingElectron(specDir, testName);
+    });
+  } else {
+    await runTestUsingElectron(specDir, testName);
+  }
+}
+
+async function runRemoteBasedElectronTests () {
+  await runTests('spec', 'remote');
 }
 
 async function runNativeElectronTests () {
@@ -195,32 +226,17 @@ async function runNativeElectronTests () {
 }
 
 async function runMainProcessElectronTests () {
-  let exe = path.resolve(BASE, utils.getElectronExec());
-  const runnerArgs = ['electron/spec-main', ...unknownArgs.slice(2)];
-  if (process.platform === 'linux') {
-    runnerArgs.unshift(path.resolve(__dirname, 'dbus_mock.py'), exe);
-    exe = 'python';
-  }
-
-  const { status, signal } = childProcess.spawnSync(exe, runnerArgs, {
-    cwd: path.resolve(__dirname, '../..'),
-    stdio: 'inherit'
-  });
-  if (status !== 0) {
-    if (status) {
-      const textStatus = process.platform === 'win32' ? `0x${status.toString(16)}` : status.toString();
-      console.log(`${fail} Electron tests failed with code ${textStatus}.`);
-    } else {
-      console.log(`${fail} Electron tests failed with kill signal ${signal}.`);
-    }
-    process.exit(1);
-  }
-  console.log(`${pass} Electron main process tests passed.`);
+  await runTests('spec-main', 'main');
 }
 
 async function installSpecModules (dir) {
+  // v8 headers use c++17 so override the gyp default of -std=c++14,
+  // but don't clobber any other CXXFLAGS that were passed into spec-runner.js
+  const CXXFLAGS = ['-std=c++17', process.env.CXXFLAGS].filter(x => !!x).join(' ');
+
   const nodeDir = path.resolve(BASE, `out/${utils.getOutDir({ shouldLog: true })}/gen/node_headers`);
   const env = Object.assign({}, process.env, {
+    CXXFLAGS,
     npm_config_nodedir: nodeDir,
     npm_config_msvs_version: '2019',
     npm_config_yes: 'true'

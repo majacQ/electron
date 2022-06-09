@@ -2,18 +2,18 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_COMMON_ELECTRON_PATHS_H_
-#define SHELL_COMMON_ELECTRON_PATHS_H_
+#ifndef ELECTRON_SHELL_COMMON_ELECTRON_PATHS_H_
+#define ELECTRON_SHELL_COMMON_ELECTRON_PATHS_H_
 
 #include "base/base_paths.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "base/base_paths_win.h"
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_MAC)
 #include "base/base_paths_mac.h"
 #endif
 
-#if defined(OS_POSIX)
+#if BUILDFLAG(IS_POSIX)
 #include "base/base_paths_posix.h"
 #endif
 
@@ -22,15 +22,16 @@ namespace electron {
 enum {
   PATH_START = 11000,
 
-  DIR_USER_DATA = PATH_START,  // Directory where user data can be written.
-  DIR_USER_CACHE,              // Directory where user cache can be written.
-  DIR_APP_LOGS,                // Directory where app logs live
+  DIR_USER_CACHE = PATH_START,  // Directory where user cache can be written.
+  DIR_APP_LOGS,                 // Directory where app logs live.
+  DIR_SESSION_DATA,             // Where cookies, localStorage are stored.
+  DIR_SESSION_CACHE,            // Where http cache, js code cache are stored.
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   DIR_RECENT,  // Directory where recent files live
 #endif
 
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
   DIR_APP_DATA,  // Application Data directory under the user profile.
 #endif
 
@@ -38,14 +39,10 @@ enum {
 
   PATH_END,  // End of new paths. Those that follow redirect to base::DIR_*
 
-#if !defined(OS_LINUX)
+#if BUILDFLAG(IS_WIN)
+  DIR_APP_DATA = base::DIR_ROAMING_APP_DATA,
+#elif BUILDFLAG(IS_MAC)
   DIR_APP_DATA = base::DIR_APP_DATA,
-#endif
-
-#if defined(OS_POSIX)
-  DIR_CACHE = base::DIR_CACHE  // Directory where to put cache data.
-#else
-  DIR_CACHE = base::DIR_APP_DATA
 #endif
 };
 
@@ -53,4 +50,4 @@ static_assert(PATH_START < PATH_END, "invalid PATH boundaries");
 
 }  // namespace electron
 
-#endif  // SHELL_COMMON_ELECTRON_PATHS_H_
+#endif  // ELECTRON_SHELL_COMMON_ELECTRON_PATHS_H_

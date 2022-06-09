@@ -8,6 +8,11 @@ const semver = require('semver');
 const { ELECTRON_DIR } = require('../../lib/utils');
 const notesGenerator = require('./notes.js');
 
+const { Octokit } = require('@octokit/rest');
+const octokit = new Octokit({
+  auth: process.env.ELECTRON_GITHUB_TOKEN
+});
+
 const semverify = version => version.replace(/^origin\//, '').replace(/[xy]/g, '0').replace(/-/g, '.');
 
 const runGit = async (args) => {
@@ -20,8 +25,9 @@ const runGit = async (args) => {
 };
 
 const tagIsSupported = tag => tag && !tag.includes('nightly') && !tag.includes('unsupported');
+const tagIsAlpha = tag => tag && tag.includes('alpha');
 const tagIsBeta = tag => tag && tag.includes('beta');
-const tagIsStable = tag => tagIsSupported(tag) && !tagIsBeta(tag);
+const tagIsStable = tag => tagIsSupported(tag) && !tagIsBeta(tag) && !tagIsAlpha(tag);
 
 const getTagsOf = async (point) => {
   try {
@@ -37,13 +43,17 @@ const getTagsOf = async (point) => {
 };
 
 const getTagsOnBranch = async (point) => {
-  const masterTags = await getTagsOf('master');
-  if (point === 'master') {
-    return masterTags;
+  const { data: { default_branch: defaultBranch } } = await octokit.repos.get({
+    owner: 'electron',
+    repo: 'electron'
+  });
+  const mainTags = await getTagsOf(defaultBranch);
+  if (point === defaultBranch) {
+    return mainTags;
   }
 
-  const masterTagsSet = new Set(masterTags);
-  return (await getTagsOf(point)).filter(tag => !masterTagsSet.has(tag));
+  const mainTagsSet = new Set(mainTags);
+  return (await getTagsOf(point)).filter(tag => !mainTagsSet.has(tag));
 };
 
 const getBranchOf = async (point) => {
@@ -66,7 +76,8 @@ const getAllBranches = async () => {
     return branches.split('\n')
       .map(branch => branch.trim())
       .filter(branch => !!branch)
-      .filter(branch => branch !== 'origin/HEAD -> origin/master')
+      // TODO(main-migration): Simplify once branch rename is complete.
+      .filter(branch => branch !== 'origin/HEAD -> origin/master' && branch !== 'origin/HEAD -> origin/main')
       .sort();
   } catch (err) {
     console.error('Failed to fetch all branches');
@@ -136,7 +147,7 @@ const getPreviousPoint = async (point) => {
   }
 };
 
-async function getReleaseNotes (range, newVersion) {
+async function getReleaseNotes (range, newVersion, unique) {
   const rangeList = range.split('..') || ['HEAD'];
   const to = rangeList.pop();
   const from = rangeList.pop() || (await getPreviousPoint(to));
@@ -147,7 +158,7 @@ async function getReleaseNotes (range, newVersion) {
 
   const notes = await notesGenerator.get(from, to, newVersion);
   const ret = {
-    text: notesGenerator.render(notes)
+    text: notesGenerator.render(notes, unique)
   };
 
   if (notes.unknown.length) {
@@ -159,7 +170,7 @@ async function getReleaseNotes (range, newVersion) {
 
 async function main () {
   const opts = minimist(process.argv.slice(2), {
-    boolean: ['help'],
+    boolean: ['help', 'unique'],
     string: ['version']
   });
   opts.range = opts._.shift();
@@ -168,13 +179,14 @@ async function main () {
     console.log(`
 easy usage: ${name} version
 
-full usage: ${name} [begin..]end [--version version]
+full usage: ${name} [begin..]end [--version version] [--unique]
 
  * 'begin' and 'end' are two git references -- tags, branches, etc --
    from which the release notes are generated.
  * if omitted, 'begin' defaults to the previous tag in end's branch.
  * if omitted, 'version' defaults to 'end'. Specifying a version is
    useful if you're making notes on a new version that isn't tagged yet.
+ * '--unique' omits changes that also landed in other branches.
 
 For example, these invocations are equivalent:
   ${process.argv[1]} v4.0.1
@@ -183,7 +195,7 @@ For example, these invocations are equivalent:
     return 0;
   }
 
-  const notes = await getReleaseNotes(opts.range, opts.version);
+  const notes = await getReleaseNotes(opts.range, opts.version, opts.unique);
   console.log(notes.text);
   if (notes.warning) {
     throw new Error(notes.warning);

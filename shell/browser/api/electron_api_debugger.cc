@@ -43,8 +43,6 @@ void Debugger::DispatchProtocolMessage(DevToolsAgentHost* agent_host,
   DCHECK(agent_host == agent_host_);
 
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
-
-  v8::Locker locker(isolate);
   v8::HandleScope handle_scope(isolate);
 
   base::StringPiece message_str(reinterpret_cast<const char*>(message.data()),
@@ -165,7 +163,7 @@ v8::Local<v8::Promise> Debugger::SendCommand(gin::Arguments* args) {
   pending_requests_.emplace(request_id, std::move(promise));
   request.SetInteger("id", request_id);
   request.SetString("method", method);
-  if (!command_params.empty()) {
+  if (!command_params.DictEmpty()) {
     request.Set("params",
                 base::Value::ToUniquePtrValue(command_params.Clone()));
   }

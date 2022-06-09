@@ -93,7 +93,7 @@ v8::Local<v8::Promise> Browser::GetApplicationInfoForProtocol(
   return handle;
 }
 
-void Browser::SetShutdownHandler(base::Callback<bool()> handler) {
+void Browser::SetShutdownHandler(base::RepeatingCallback<bool()> handler) {
   [[AtomApplication sharedApplication] setShutdownHandler:std::move(handler)];
 }
 
@@ -115,6 +115,10 @@ void Browser::Focus(gin::Arguments* args) {
 
 void Browser::Hide() {
   [[AtomApplication sharedApplication] hide:nil];
+}
+
+bool Browser::IsHidden() {
+  return [[AtomApplication sharedApplication] isHidden];
 }
 
 void Browser::Show() {
@@ -218,9 +222,7 @@ std::u16string Browser::GetApplicationNameForProtocol(const GURL& url) {
   return app_display_name;
 }
 
-void Browser::SetAppUserModelID(const std::wstring& name) {}
-
-bool Browser::SetBadgeCount(base::Optional<int> count) {
+bool Browser::SetBadgeCount(absl::optional<int> count) {
   DockSetBadgeText(!count.has_value() || count.value() != 0
                        ? badging::BadgeManager::GetBadgeString(count)
                        : "");
@@ -279,10 +281,11 @@ void Browser::DidFailToContinueUserActivity(const std::string& type,
 }
 
 bool Browser::ContinueUserActivity(const std::string& type,
-                                   base::DictionaryValue user_info) {
+                                   base::DictionaryValue user_info,
+                                   base::DictionaryValue details) {
   bool prevent_default = false;
   for (BrowserObserver& observer : observers_)
-    observer.OnContinueUserActivity(&prevent_default, type, user_info);
+    observer.OnContinueUserActivity(&prevent_default, type, user_info, details);
   return prevent_default;
 }
 
@@ -315,26 +318,32 @@ Browser::LoginItemSettings Browser::GetLoginItemSettings(
   return settings;
 }
 
+// Some logic here copied from GetLoginItemForApp in base/mac/mac_util.mm
 void RemoveFromLoginItems() {
 #pragma clang diagnostic push  // https://crbug.com/1154377
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-  // logic to find the login item copied from GetLoginItemForApp in
-  // base/mac/mac_util.mm
   base::ScopedCFTypeRef<LSSharedFileListRef> login_items(
       LSSharedFileListCreate(NULL, kLSSharedFileListSessionLoginItems, NULL));
   if (!login_items.get()) {
     LOG(ERROR) << "Couldn't get a Login Items list.";
     return;
   }
+
   base::scoped_nsobject<NSArray> login_items_array(
       base::mac::CFToNSCast(LSSharedFileListCopySnapshot(login_items, NULL)));
   NSURL* url = [NSURL fileURLWithPath:[base::mac::MainBundle() bundlePath]];
-  for (NSUInteger i = 0; i < [login_items_array count]; ++i) {
+  for (id login_item in login_items_array.get()) {
     LSSharedFileListItemRef item =
-        reinterpret_cast<LSSharedFileListItemRef>(login_items_array[i]);
+        reinterpret_cast<LSSharedFileListItemRef>(login_item);
+
+    // kLSSharedFileListDoNotMountVolumes is used so that we don't trigger
+    // mounting when it's not expected by a user. Just listing the login
+    // items should not cause any side-effects.
     base::ScopedCFTypeRef<CFErrorRef> error;
-    CFURLRef item_url_ref =
-        LSSharedFileListItemCopyResolvedURL(item, 0, error.InitializeInto());
+    base::ScopedCFTypeRef<CFURLRef> item_url_ref(
+        LSSharedFileListItemCopyResolvedURL(
+            item, kLSSharedFileListDoNotMountVolumes, error.InitializeInto()));
+
     if (!error && item_url_ref) {
       base::ScopedCFTypeRef<CFURLRef> item_url(item_url_ref);
       if (CFEqual(item_url, url)) {
@@ -395,16 +404,16 @@ std::string Browser::DockGetBadgeText() {
 
 void Browser::DockHide() {
   // Transforming application state from UIElement to Foreground is an
-  // asyncronous operation, and unfortunately there is currently no way to know
+  // asynchronous operation, and unfortunately there is currently no way to know
   // when it is finished.
   // So if we call DockHide => DockShow => DockHide => DockShow in a very short
-  // time, we would triger a bug of macOS that, there would be multiple dock
+  // time, we would trigger a bug of macOS that, there would be multiple dock
   // icons of the app left in system.
   // To work around this, we make sure DockHide does nothing if it is called
   // immediately after DockShow. After some experiments, 1 second seems to be
   // a proper interval.
   if (!last_dock_show_.is_null() &&
-      base::Time::Now() - last_dock_show_ < base::TimeDelta::FromSeconds(1)) {
+      base::Time::Now() - last_dock_show_ < base::Seconds(1)) {
     return;
   }
 
@@ -500,13 +509,14 @@ void Browser::ShowAboutPanel() {
 }
 
 void Browser::SetAboutPanelOptions(base::DictionaryValue options) {
-  about_panel_options_.Clear();
+  about_panel_options_.DictClear();
 
-  for (auto& pair : options) {
-    std::string& key = pair.first;
-    if (!key.empty() && pair.second->is_string()) {
+  for (const auto pair : options.DictItems()) {
+    std::string key = std::string(pair.first);
+    if (!key.empty() && pair.second.is_string()) {
       key[0] = base::ToUpperASCII(key[0]);
-      about_panel_options_.Set(key, std::move(pair.second));
+      auto val = std::make_unique<base::Value>(pair.second.Clone());
+      about_panel_options_.Set(key, std::move(val));
     }
   }
 }

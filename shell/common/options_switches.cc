@@ -31,6 +31,14 @@ const char kFullscreen[] = "fullscreen";
 const char kTrafficLightPosition[] = "trafficLightPosition";
 const char kRoundedCorners[] = "roundedCorners";
 
+// The color to use as the theme and symbol colors respectively for Window
+// Controls Overlay if enabled on Windows.
+const char kOverlayButtonColor[] = "color";
+const char kOverlaySymbolColor[] = "symbolColor";
+
+// The custom height for Window Controls Overlay.
+const char kOverlayHeight[] = "height";
+
 // Whether the window should show in taskbar.
 const char kSkipTaskbar[] = "skipTaskbar";
 
@@ -112,26 +120,14 @@ const char kPreloadScript[] = "preload";
 
 const char kPreloadScripts[] = "preloadScripts";
 
-// Like --preload, but the passed argument is an URL.
-const char kPreloadURL[] = "preloadURL";
-
 // Enable the node integration.
 const char kNodeIntegration[] = "nodeIntegration";
 
 // Enable context isolation of Electron APIs and preload script
 const char kContextIsolation[] = "contextIsolation";
 
-// Enable world safe passing of values when using "executeJavaScript"
-const char kWorldSafeExecuteJavaScript[] = "worldSafeExecuteJavaScript";
-
-// Instance ID of guest WebContents.
-const char kGuestInstanceID[] = "guestInstanceId";
-
 // Web runtime features.
 const char kExperimentalFeatures[] = "experimentalFeatures";
-
-// Opener window's ID.
-const char kOpenerID[] = "openerId";
 
 // Enable the rubber banding effect.
 const char kScrollBounce[] = "scrollBounce";
@@ -147,8 +143,6 @@ const char kNodeIntegrationInWorker[] = "nodeIntegrationInWorker";
 
 // Enable the web view tag.
 const char kWebviewTag[] = "webviewTag";
-
-const char kNativeWindowOpen[] = "nativeWindowOpen";
 
 const char kCustomArgs[] = "additionalArguments";
 
@@ -174,6 +168,9 @@ const char kJavaScript[] = "javascript";
 // Enables image support.
 const char kImages[] = "images";
 
+// Image animation policy.
+const char kImageAnimationPolicy[] = "imageAnimationPolicy";
+
 // Make TextArea elements resizable.
 const char kTextAreasAreResizable[] = "textAreasAreResizable";
 
@@ -184,9 +181,6 @@ const char kWebGL[] = "webgl";
 // navigation.
 const char kNavigateOnDragDrop[] = "navigateOnDragDrop";
 
-const char kDisableElectronSiteInstanceOverrides[] =
-    "disableElectronSiteInstanceOverrides";
-const char kEnableNodeLeakageInRenderers[] = "enableNodeLeakageInRenderers";
 const char kHiddenPage[] = "hiddenPage";
 
 #if BUILDFLAG(ENABLE_BUILTIN_SPELLCHECKER)
@@ -196,6 +190,8 @@ const char kSpellcheck[] = "spellcheck";
 const char kEnableWebSQL[] = "enableWebSQL";
 
 const char kEnablePreferredSizeMode[] = "enablePreferredSizeMode";
+
+const char ktitleBarOverlay[] = "titleBarOverlay";
 
 }  // namespace options
 
@@ -239,8 +235,6 @@ const char kAppUserModelId[] = "app-user-model-id";
 
 // The application path
 const char kAppPath[] = "app-path";
-
-const char kEnableApiFilteringLogging[] = "enable-api-filtering-logging";
 
 // The command line switch versions of the options.
 const char kScrollBounce[] = "scroll-bounce";

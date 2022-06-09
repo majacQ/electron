@@ -9,12 +9,13 @@
 #include <utility>
 
 #include "base/barrier_closure.h"
+#include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/no_destructor.h"
 #include "base/path_service.h"
+#include "base/strings/escape.h"
 #include "base/strings/string_util.h"
-#include "base/task/post_task.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/common/chrome_paths.h"
@@ -32,12 +33,9 @@
 #include "content/public/browser/cors_origin_pattern_setter.h"
 #include "content/public/browser/shared_cors_origin_access_list.h"
 #include "content/public/browser/storage_partition.h"
-#include "mojo/public/cpp/bindings/self_owned_receiver.h"
-#include "net/base/escape.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/wrapper_shared_url_loader_factory.h"
 #include "services/network/public/mojom/network_context.mojom.h"
-#include "shell/browser/api/electron_api_url_loader.h"
 #include "shell/browser/cookie_change_notifier.h"
 #include "shell/browser/electron_browser_client.h"
 #include "shell/browser/electron_browser_main_parts.h"
@@ -89,7 +87,7 @@ namespace {
 
 // Convert string to lower case and escape it.
 std::string MakePartitionName(const std::string& input) {
-  return net::EscapePath(base::ToLowerASCII(input));
+  return base::EscapePath(base::ToLowerASCII(input));
 }
 
 }  // namespace
@@ -105,8 +103,8 @@ ElectronBrowserContext::browser_context_map() {
 ElectronBrowserContext::ElectronBrowserContext(const std::string& partition,
                                                bool in_memory,
                                                base::DictionaryValue options)
-    : storage_policy_(new SpecialStoragePolicy),
-      protocol_registry_(new ProtocolRegistry),
+    : storage_policy_(base::MakeRefCounted<SpecialStoragePolicy>()),
+      protocol_registry_(base::WrapUnique(new ProtocolRegistry)),
       in_memory_(in_memory),
       ssl_config_(network::mojom::SSLConfig::New()) {
   user_agent_ = ElectronBrowserClient::Get()->GetUserAgent();
@@ -114,25 +112,22 @@ ElectronBrowserContext::ElectronBrowserContext(const std::string& partition,
   // Read options.
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   use_cache_ = !command_line->HasSwitch(switches::kDisableHttpCache);
-  options.GetBoolean("cache", &use_cache_);
+  if (auto use_cache_opt = options.FindBoolKey("cache")) {
+    use_cache_ = use_cache_opt.value();
+  }
 
   base::StringToInt(command_line->GetSwitchValueASCII(switches::kDiskCacheSize),
                     &max_cache_size_);
 
-  if (!base::PathService::Get(DIR_USER_DATA, &path_)) {
-    base::PathService::Get(DIR_APP_DATA, &path_);
-    path_ = path_.Append(base::FilePath::FromUTF8Unsafe(GetApplicationName()));
-    base::PathService::Override(DIR_USER_DATA, path_);
-    base::PathService::Override(chrome::DIR_USER_DATA, path_);
-    base::PathService::Override(
-        chrome::DIR_APP_DICTIONARIES,
-        path_.Append(base::FilePath::FromUTF8Unsafe("Dictionaries")));
+  base::PathService::Get(DIR_SESSION_DATA, &path_);
+  base::PathService::Get(DIR_SESSION_CACHE, &cache_path_);
+  if (!in_memory && !partition.empty()) {
+    base::FilePath subdir = base::FilePath(FILE_PATH_LITERAL("Partitions"))
+                                .Append(base::FilePath::FromUTF8Unsafe(
+                                    MakePartitionName(partition)));
+    path_ = path_.Append(subdir);
+    cache_path_ = cache_path_.Append(subdir);
   }
-
-  if (!in_memory && !partition.empty())
-    path_ = path_.Append(FILE_PATH_LITERAL("Partitions"))
-                .Append(base::FilePath::FromUTF8Unsafe(
-                    MakePartitionName(partition)));
 
   BrowserContextDependencyManager::GetInstance()->MarkBrowserContextLive(this);
 
@@ -156,7 +151,7 @@ ElectronBrowserContext::ElectronBrowserContext(const std::string& partition,
 
 ElectronBrowserContext::~ElectronBrowserContext() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  NotifyWillBeDestroyed(this);
+  NotifyWillBeDestroyed();
   // Notify any keyed services of browser context destruction.
   BrowserContextDependencyManager::GetInstance()->DestroyBrowserContextServices(
       this);
@@ -186,9 +181,9 @@ void ElectronBrowserContext::InitPrefs() {
 
 #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS) || \
     BUILDFLAG(ENABLE_BUILTIN_SPELLCHECKER)
-  auto registry = WrapRefCounted(new user_prefs::PrefRegistrySyncable);
+  auto registry = base::MakeRefCounted<user_prefs::PrefRegistrySyncable>();
 #else
-  auto registry = WrapRefCounted(new PrefRegistrySimple);
+  auto registry = base::MakeRefCounted<PrefRegistrySimple>();
 #endif
 
   registry->RegisterFilePathPref(prefs::kSelectFileLastDirectory,
@@ -227,12 +222,12 @@ void ElectronBrowserContext::InitPrefs() {
   auto* current_dictionaries =
       prefs()->Get(spellcheck::prefs::kSpellCheckDictionaries);
   // No configured dictionaries, the default will be en-US
-  if (current_dictionaries->GetList().empty()) {
+  if (current_dictionaries->GetListDeprecated().empty()) {
     std::string default_code = spellcheck::GetCorrespondingSpellCheckLanguage(
         base::i18n::GetConfiguredLocale());
     if (!default_code.empty()) {
       base::ListValue language_codes;
-      language_codes.AppendString(default_code);
+      language_codes.Append(default_code);
       prefs()->Set(spellcheck::prefs::kSpellCheckDictionaries, language_codes);
     }
   }
@@ -283,7 +278,7 @@ ElectronBrowserContext::CreateZoomLevelDelegate(
 content::DownloadManagerDelegate*
 ElectronBrowserContext::GetDownloadManagerDelegate() {
   if (!download_manager_delegate_.get()) {
-    auto* download_manager = content::BrowserContext::GetDownloadManager(this);
+    auto* download_manager = this->GetDownloadManager();
     download_manager_delegate_ =
         std::make_unique<ElectronDownloadManagerDelegate>(download_manager);
   }
@@ -294,6 +289,11 @@ content::BrowserPluginGuestManager* ElectronBrowserContext::GetGuestManager() {
   if (!guest_manager_)
     guest_manager_ = std::make_unique<WebViewManager>();
   return guest_manager_.get();
+}
+
+content::PlatformNotificationService*
+ElectronBrowserContext::GetPlatformNotificationService() {
+  return ElectronBrowserClient::Get()->GetPlatformNotificationService();
 }
 
 content::PermissionControllerDelegate*
@@ -336,13 +336,12 @@ ElectronBrowserContext::GetURLLoaderFactory() {
       ->WillCreateURLLoaderFactory(
           this, nullptr, -1,
           content::ContentBrowserClient::URLLoaderFactoryType::kNavigation,
-          url::Origin(), base::nullopt, ukm::kInvalidSourceIdObj,
+          url::Origin(), absl::nullopt, ukm::kInvalidSourceIdObj,
           &factory_receiver, &header_client, nullptr, nullptr, nullptr);
 
   network::mojom::URLLoaderFactoryParamsPtr params =
       network::mojom::URLLoaderFactoryParams::New();
   params->header_client = std::move(header_client);
-  params->auth_client = auth_client_.BindNewPipeAndPassRemote();
   params->process_id = network::mojom::kBrowserProcessId;
   params->is_trusted = true;
   params->is_corb_enabled = false;
@@ -350,50 +349,13 @@ ElectronBrowserContext::GetURLLoaderFactory() {
   // the non-NetworkService implementation always has web security enabled.
   params->disable_web_security = false;
 
-  auto* storage_partition =
-      content::BrowserContext::GetDefaultStoragePartition(this);
-  params->url_loader_network_observer =
-      storage_partition->CreateURLLoaderNetworkObserverForNavigationRequest(-1);
+  auto* storage_partition = GetDefaultStoragePartition();
   storage_partition->GetNetworkContext()->CreateURLLoaderFactory(
       std::move(factory_receiver), std::move(params));
   url_loader_factory_ =
       base::MakeRefCounted<network::WrapperSharedURLLoaderFactory>(
           std::move(network_factory_remote));
   return url_loader_factory_;
-}
-
-class AuthResponder : public network::mojom::TrustedAuthClient {
- public:
-  AuthResponder() {}
-  ~AuthResponder() override = default;
-
- private:
-  void OnAuthRequired(
-      const base::Optional<::base::UnguessableToken>& window_id,
-      uint32_t process_id,
-      uint32_t routing_id,
-      uint32_t request_id,
-      const ::GURL& url,
-      bool first_auth_attempt,
-      const ::net::AuthChallengeInfo& auth_info,
-      ::network::mojom::URLResponseHeadPtr head,
-      mojo::PendingRemote<network::mojom::AuthChallengeResponder>
-          auth_challenge_responder) override {
-    api::SimpleURLLoaderWrapper* url_loader =
-        api::SimpleURLLoaderWrapper::FromID(routing_id);
-    if (url_loader) {
-      url_loader->OnAuthRequired(url, first_auth_attempt, auth_info,
-                                 std::move(head),
-                                 std::move(auth_challenge_responder));
-    }
-  }
-};
-
-void ElectronBrowserContext::OnLoaderCreated(
-    int32_t request_id,
-    mojo::PendingReceiver<network::mojom::TrustedAuthClient> auth_client) {
-  mojo::MakeSelfOwnedReceiver(std::make_unique<AuthResponder>(),
-                              std::move(auth_client));
 }
 
 content::PushMessagingService*

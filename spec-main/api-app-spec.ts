@@ -1,18 +1,16 @@
-import { expect } from 'chai';
+import { assert, expect } from 'chai';
 import * as cp from 'child_process';
 import * as https from 'https';
 import * as http from 'http';
 import * as net from 'net';
-import * as fs from 'fs';
+import * as fs from 'fs-extra';
 import * as path from 'path';
 import { promisify } from 'util';
-import { app, BrowserWindow, Menu, session } from 'electron/main';
+import { app, BrowserWindow, Menu, session, net as electronNet } from 'electron/main';
 import { emittedOnce } from './events-helpers';
 import { closeWindow, closeAllWindows } from './window-helpers';
-import { ifdescribe, ifit } from './spec-helpers';
+import { ifdescribe, ifit, waitUntil } from './spec-helpers';
 import split = require('split')
-
-const features = process._linkedBinding('electron_common_features');
 
 const fixturesPath = path.resolve(__dirname, '../spec/fixtures');
 
@@ -92,9 +90,9 @@ describe('app module', () => {
 
       it('overrides the name', () => {
         expect(app.name).to.equal('Electron Test Main');
-        app.name = 'test-name';
+        app.name = 'electron-test-name';
 
-        expect(app.name).to.equal('test-name');
+        expect(app.name).to.equal('electron-test-name');
         app.name = 'Electron Test Main';
       });
     });
@@ -106,9 +104,9 @@ describe('app module', () => {
 
       it('overrides the name', () => {
         expect(app.getName()).to.equal('Electron Test Main');
-        app.setName('test-name');
+        app.setName('electron-test-name');
 
-        expect(app.getName()).to.equal('test-name');
+        expect(app.getName()).to.equal('electron-test-name');
         app.setName('Electron Test Main');
       });
     });
@@ -122,12 +120,9 @@ describe('app module', () => {
 
   describe('app.getLocaleCountryCode()', () => {
     it('should be empty or have length of two', () => {
-      let expectedLength = 2;
-      if (process.platform === 'linux') {
-        // Linux CI machines have no locale.
-        expectedLength = 0;
-      }
-      expect(app.getLocaleCountryCode()).to.be.a('string').and.have.lengthOf(expectedLength);
+      const localeCountryCode = app.getLocaleCountryCode();
+      expect(localeCountryCode).to.be.a('string');
+      expect(localeCountryCode.length).to.be.oneOf([0, 2]);
     });
   });
 
@@ -143,8 +138,7 @@ describe('app module', () => {
     });
   });
 
-  // Running child app under ASan might receive SIGKILL because of OOM.
-  ifdescribe(!process.env.IS_ASAN)('app.exit(exitCode)', () => {
+  describe('app.exit(exitCode)', () => {
     let appProcess: cp.ChildProcess | null = null;
 
     afterEach(() => {
@@ -210,11 +204,15 @@ describe('app module', () => {
     });
   });
 
-  // Running child app under ASan might receive SIGKILL because of OOM.
-  ifdescribe(!process.env.IS_ASAN)('app.requestSingleInstanceLock', () => {
+  describe('app.requestSingleInstanceLock', () => {
+    interface SingleInstanceLockTestArgs {
+      args: string[];
+      expectedAdditionalData: unknown;
+    }
+
     it('prevents the second launch of app', async function () {
       this.timeout(120000);
-      const appPath = path.join(fixturesPath, 'api', 'singleton');
+      const appPath = path.join(fixturesPath, 'api', 'singleton-data');
       const first = cp.spawn(process.execPath, [appPath]);
       await emittedOnce(first.stdout, 'data');
       // Start second app when received output.
@@ -225,9 +223,16 @@ describe('app module', () => {
       expect(code1).to.equal(0);
     });
 
-    it('passes arguments to the second-instance event', async () => {
-      const appPath = path.join(fixturesPath, 'api', 'singleton');
-      const first = cp.spawn(process.execPath, [appPath]);
+    it('returns true when setting non-existent user data folder', async function () {
+      const appPath = path.join(fixturesPath, 'api', 'singleton-userdata');
+      const instance = cp.spawn(process.execPath, [appPath]);
+      const [code] = await emittedOnce(instance, 'exit');
+      expect(code).to.equal(0);
+    });
+
+    async function testArgumentPassing (testArgs: SingleInstanceLockTestArgs) {
+      const appPath = path.join(fixturesPath, 'api', 'singleton-data');
+      const first = cp.spawn(process.execPath, [appPath, ...testArgs.args]);
       const firstExited = emittedOnce(first, 'exit');
 
       // Wait for the first app to boot.
@@ -235,26 +240,108 @@ describe('app module', () => {
       while ((await emittedOnce(firstStdoutLines, 'data')).toString() !== 'started') {
         // wait.
       }
-      const data2Promise = emittedOnce(firstStdoutLines, 'data');
+      const additionalDataPromise = emittedOnce(firstStdoutLines, 'data');
 
-      const secondInstanceArgs = [process.execPath, appPath, '--some-switch', 'some-arg'];
+      const secondInstanceArgs = [process.execPath, appPath, ...testArgs.args, '--some-switch', 'some-arg'];
       const second = cp.spawn(secondInstanceArgs[0], secondInstanceArgs.slice(1));
-      const [code2] = await emittedOnce(second, 'exit');
+      const secondExited = emittedOnce(second, 'exit');
+
+      const [code2] = await secondExited;
       expect(code2).to.equal(1);
       const [code1] = await firstExited;
       expect(code1).to.equal(0);
-      const data2 = (await data2Promise)[0].toString('ascii');
-      const secondInstanceArgsReceived: string[] = JSON.parse(data2.toString('ascii'));
-      const expected = process.platform === 'win32'
-        ? [process.execPath, '--some-switch', '--allow-file-access-from-files', appPath, 'some-arg']
-        : secondInstanceArgs;
-      expect(secondInstanceArgsReceived).to.eql(expected,
-        `expected ${JSON.stringify(expected)} but got ${data2.toString('ascii')}`);
+      const dataFromSecondInstance = await additionalDataPromise;
+      const [args, additionalData] = dataFromSecondInstance[0].toString('ascii').split('||');
+      const secondInstanceArgsReceived: string[] = JSON.parse(args.toString('ascii'));
+      const secondInstanceDataReceived = JSON.parse(additionalData.toString('ascii'));
+
+      // Ensure secondInstanceArgs is a subset of secondInstanceArgsReceived
+      for (const arg of secondInstanceArgs) {
+        expect(secondInstanceArgsReceived).to.include(arg,
+          `argument ${arg} is missing from received second args`);
+      }
+      expect(secondInstanceDataReceived).to.be.deep.equal(testArgs.expectedAdditionalData,
+        `received data ${JSON.stringify(secondInstanceDataReceived)} is not equal to expected data ${JSON.stringify(testArgs.expectedAdditionalData)}.`);
+    }
+
+    it('passes arguments to the second-instance event no additional data', async () => {
+      await testArgumentPassing({
+        args: [],
+        expectedAdditionalData: null
+      });
+    });
+
+    it('sends and receives JSON object data', async () => {
+      const expectedAdditionalData = {
+        level: 1,
+        testkey: 'testvalue1',
+        inner: {
+          level: 2,
+          testkey: 'testvalue2'
+        }
+      };
+      await testArgumentPassing({
+        args: ['--send-data'],
+        expectedAdditionalData
+      });
+    });
+
+    it('sends and receives numerical data', async () => {
+      await testArgumentPassing({
+        args: ['--send-data', '--data-content=2'],
+        expectedAdditionalData: 2
+      });
+    });
+
+    it('sends and receives string data', async () => {
+      await testArgumentPassing({
+        args: ['--send-data', '--data-content="data"'],
+        expectedAdditionalData: 'data'
+      });
+    });
+
+    it('sends and receives boolean data', async () => {
+      await testArgumentPassing({
+        args: ['--send-data', '--data-content=false'],
+        expectedAdditionalData: false
+      });
+    });
+
+    it('sends and receives array data', async () => {
+      await testArgumentPassing({
+        args: ['--send-data', '--data-content=[2, 3, 4]'],
+        expectedAdditionalData: [2, 3, 4]
+      });
+    });
+
+    it('sends and receives mixed array data', async () => {
+      await testArgumentPassing({
+        args: ['--send-data', '--data-content=["2", true, 4]'],
+        expectedAdditionalData: ['2', true, 4]
+      });
+    });
+
+    it('sends and receives null data', async () => {
+      await testArgumentPassing({
+        args: ['--send-data', '--data-content=null'],
+        expectedAdditionalData: null
+      });
+    });
+
+    it('cannot send or receive undefined data', async () => {
+      try {
+        await testArgumentPassing({
+          args: ['--send-ack', '--ack-content="undefined"', '--prevent-default', '--send-data', '--data-content="undefined"'],
+          expectedAdditionalData: undefined
+        });
+        assert(false);
+      } catch (e) {
+        // This is expected.
+      }
     });
   });
 
-  // Running child app under ASan might receive SIGKILL because of OOM.
-  ifdescribe(!process.env.IS_ASAN)('app.relaunch', () => {
+  describe('app.relaunch', () => {
     let server: net.Server | null = null;
     const socketPath = process.platform === 'win32' ? '\\\\.\\pipe\\electron-app-relaunch' : '/tmp/electron-app-relaunch';
 
@@ -324,6 +411,24 @@ describe('app module', () => {
       const w = new BrowserWindow({ show: false });
       w.loadURL(secureUrl);
       await emittedOnce(app, 'certificate-error');
+    });
+
+    describe('when denied', () => {
+      before(() => {
+        app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+          callback(false);
+        });
+      });
+
+      after(() => {
+        app.removeAllListeners('certificate-error');
+      });
+
+      it('causes did-fail-load', async () => {
+        const w = new BrowserWindow({ show: false });
+        w.loadURL(secureUrl);
+        await emittedOnce(w.webContents, 'did-fail-load');
+      });
     });
   });
 
@@ -448,25 +553,6 @@ describe('app module', () => {
       const [, webContents, details] = await emitted;
       expect(webContents).to.equal(w.webContents);
       expect(details.reason).to.be.oneOf(['crashed', 'abnormal-exit']);
-    });
-
-    ifdescribe(features.isDesktopCapturerEnabled())('desktopCapturer module filtering', () => {
-      it('should emit desktop-capturer-get-sources event when desktopCapturer.getSources() is invoked', async () => {
-        w = new BrowserWindow({
-          show: false,
-          webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false
-          }
-        });
-        await w.loadURL('about:blank');
-
-        const promise = emittedOnce(app, 'desktop-capturer-get-sources');
-        w.webContents.executeJavaScript('require(\'electron\').desktopCapturer.getSources({ types: [\'screen\'] })');
-
-        const [, webContents] = await promise;
-        expect(webContents).to.equal(w.webContents);
-      });
     });
   });
 
@@ -854,8 +940,7 @@ describe('app module', () => {
     });
   });
 
-  // Running child app under ASan might receive SIGKILL because of OOM.
-  ifdescribe(!process.env.IS_ASAN)('getAppPath', () => {
+  describe('getAppPath', () => {
     it('works for directories with package.json', async () => {
       const { appPath } = await runTestApp('app-path');
       expect(appPath).to.equal(path.resolve(fixturesPath, 'api/app-path'));
@@ -913,6 +998,10 @@ describe('app module', () => {
         expect(app.getPath('recent')).to.equal('C:\\fake-path');
       });
     }
+
+    it('uses the app name in getPath(userData)', () => {
+      expect(app.getPath('userData')).to.include(app.name);
+    });
   });
 
   describe('setPath(name, path)', () => {
@@ -932,6 +1021,98 @@ describe('app module', () => {
       expect(fs.existsSync(badPath)).to.be.false();
 
       expect(() => { app.getPath(badPath as any); }).to.throw();
+    });
+
+    describe('localUserData', () => {
+      it('has correct value', () => {
+        const localUserData = app.getPath('localUserData');
+        if (process.platform === 'win32') {
+          expect(localUserData.startsWith(String(process.env.LOCALAPPDATA))).to.equal(true);
+        } else {
+          expect(localUserData).to.equal(app.getPath('userData'));
+        }
+      });
+    });
+
+    const appPath = path.join(__dirname, 'fixtures', 'apps', 'set-path');
+    const appName = fs.readJsonSync(path.join(appPath, 'package.json')).name;
+    const userDataPath = path.join(app.getPath('appData'), appName);
+    const tempBrowserDataPath = path.join(app.getPath('temp'), appName);
+
+    const hasAllFiles = (dir: string, files: string[]) => files.every(f => fs.existsSync(path.join(dir, f)));
+    const hasNoFiles = (dir: string, files: string[]) => files.every(f => !fs.existsSync(path.join(dir, f)));
+
+    beforeEach(() => {
+      fs.removeSync(userDataPath);
+      fs.removeSync(tempBrowserDataPath);
+    });
+
+    describe('sessionData', () => {
+      const sessionFiles = [
+        'Preferences',
+        'Local Storage',
+        'IndexedDB',
+        'Service Worker'
+      ];
+
+      it('writes to userData by default', () => {
+        expect(hasNoFiles(userDataPath, sessionFiles));
+        cp.spawnSync(process.execPath, [appPath]);
+        expect(hasAllFiles(userDataPath, sessionFiles));
+      });
+
+      it('includes no http cache', () => {
+        const cachePath = path.join(tempBrowserDataPath, 'Cache');
+        expect(fs.existsSync(cachePath)).to.equal(false);
+        cp.spawnSync(process.execPath, [appPath, 'sessionData', tempBrowserDataPath]);
+        expect(fs.existsSync(cachePath)).to.equal(false);
+      });
+
+      it('can be changed', () => {
+        expect(hasNoFiles(userDataPath, sessionFiles));
+        cp.spawnSync(process.execPath, [appPath, 'sessionData', tempBrowserDataPath]);
+        expect(hasNoFiles(userDataPath, sessionFiles));
+        expect(hasAllFiles(tempBrowserDataPath, sessionFiles));
+      });
+
+      it('changing userData affects default sessionData', () => {
+        expect(hasNoFiles(userDataPath, sessionFiles));
+        cp.spawnSync(process.execPath, [appPath, 'userData', tempBrowserDataPath]);
+        expect(hasNoFiles(userDataPath, sessionFiles));
+        expect(hasAllFiles(tempBrowserDataPath, sessionFiles));
+      });
+
+      it('stores data of partition in child dir', () => {
+        const partition = 'partition';
+        const partitionDataPath = path.join(tempBrowserDataPath, 'Partitions', partition);
+        expect(hasNoFiles(partitionDataPath, sessionFiles));
+        cp.spawnSync(process.execPath, [appPath, 'sessionData', tempBrowserDataPath, partition]);
+        expect(hasAllFiles(partitionDataPath, sessionFiles));
+      });
+    });
+
+    describe('sessionCache', () => {
+      const cacheDirs = ['Cache', 'Code Cache'];
+
+      it('writes to userData by default', () => {
+        expect(hasNoFiles(userDataPath, cacheDirs));
+        cp.spawnSync(process.execPath, [appPath]);
+        expect(hasAllFiles(userDataPath, cacheDirs));
+      });
+
+      it('stores http cache', () => {
+        expect(hasNoFiles(tempBrowserDataPath, cacheDirs));
+        cp.spawnSync(process.execPath, [appPath, 'sessionCache', tempBrowserDataPath]);
+        expect(hasAllFiles(tempBrowserDataPath, cacheDirs));
+      });
+
+      it('stores http cache of partition in child dir', () => {
+        const partition = 'partition';
+        const partitionDir = path.join(tempBrowserDataPath, 'Partitions', partition);
+        expect(hasNoFiles(partitionDir, cacheDirs));
+        cp.spawnSync(process.execPath, [appPath, 'sessionCache', tempBrowserDataPath, partition]);
+        expect(hasAllFiles(partitionDir, cacheDirs));
+      });
     });
   });
 
@@ -1280,8 +1461,15 @@ describe('app module', () => {
       });
       const [exitCode] = await emittedOnce(appProcess, 'exit');
       if (exitCode === 0) {
-        // return info data on successful exit
-        return JSON.parse(gpuInfoData);
+        try {
+          const [, json] = /HERE COMES THE JSON: (.+) AND THERE IT WAS/.exec(gpuInfoData)!;
+          // return info data on successful exit
+          return JSON.parse(json);
+        } catch (e) {
+          console.error('Failed to interpret the following as JSON:');
+          console.error(gpuInfoData);
+          throw e;
+        }
       } else {
         // return error if not clean exit
         return Promise.reject(new Error(errorData));
@@ -1331,8 +1519,7 @@ describe('app module', () => {
     });
   });
 
-  // Running child app under ASan might receive SIGKILL because of OOM.
-  ifdescribe(!process.env.IS_ASAN)('sandbox options', () => {
+  describe('sandbox options', () => {
     let appProcess: cp.ChildProcess = null as any;
     let server: net.Server = null as any;
     const socketPath = process.platform === 'win32' ? '\\\\.\\pipe\\electron-mixed-sandbox' : '/tmp/electron-mixed-sandbox';
@@ -1375,7 +1562,7 @@ describe('app module', () => {
     describe('when app.enableSandbox() is called', () => {
       it('adds --enable-sandbox to all renderer processes', done => {
         const appPath = path.join(fixturesPath, 'api', 'mixed-sandbox-app');
-        appProcess = cp.spawn(process.execPath, [appPath, '--app-enable-sandbox']);
+        appProcess = cp.spawn(process.execPath, [appPath, '--app-enable-sandbox'], { stdio: 'inherit' });
 
         server.once('error', error => { done(error); });
 
@@ -1400,7 +1587,7 @@ describe('app module', () => {
     describe('when the app is launched with --enable-sandbox', () => {
       it('adds --enable-sandbox to all renderer processes', done => {
         const appPath = path.join(fixturesPath, 'api', 'mixed-sandbox-app');
-        appProcess = cp.spawn(process.execPath, [appPath, '--enable-sandbox']);
+        appProcess = cp.spawn(process.execPath, [appPath, '--enable-sandbox'], { stdio: 'inherit' });
 
         server.once('error', error => { done(error); });
 
@@ -1428,6 +1615,23 @@ describe('app module', () => {
       expect(() => {
         app.disableDomainBlockingFor3DAPIs();
       }).to.throw(/before app is ready/);
+    });
+  });
+
+  ifdescribe(process.platform === 'darwin')('app hide and show API', () => {
+    describe('app.isHidden', () => {
+      it('returns true when the app is hidden', async () => {
+        app.hide();
+        await expect(
+          waitUntil(() => app.isHidden())
+        ).to.eventually.be.fulfilled();
+      });
+      it('returns false when the app is shown', async () => {
+        app.show();
+        await expect(
+          waitUntil(() => !app.isHidden())
+        ).to.eventually.be.fulfilled();
+      });
     });
   });
 
@@ -1557,8 +1761,7 @@ describe('app module', () => {
     });
   });
 
-  // Running child app under ASan might receive SIGKILL because of OOM.
-  ifdescribe(!process.env.IS_ASAN)('commandLine.hasSwitch (existing argv)', () => {
+  describe('commandLine.hasSwitch (existing argv)', () => {
     it('returns true when present', async () => {
       const { hasSwitch } = await runTestApp('command-line', '--foobar');
       expect(hasSwitch).to.equal(true);
@@ -1586,8 +1789,7 @@ describe('app module', () => {
     });
   });
 
-  // Running child app under ASan might receive SIGKILL because of OOM.
-  ifdescribe(!process.env.IS_ASAN)('commandLine.getSwitchValue (existing argv)', () => {
+  describe('commandLine.getSwitchValue (existing argv)', () => {
     it('returns the value when present', async () => {
       const { getSwitchValue } = await runTestApp('command-line', '--foobar=test');
       expect(getSwitchValue).to.equal('test');
@@ -1604,6 +1806,21 @@ describe('app module', () => {
     });
   });
 
+  describe('commandLine.removeSwitch', () => {
+    it('no-ops a non-existent switch', async () => {
+      expect(app.commandLine.hasSwitch('foobar3')).to.equal(false);
+      app.commandLine.removeSwitch('foobar3');
+      expect(app.commandLine.hasSwitch('foobar3')).to.equal(false);
+    });
+
+    it('removes an existing switch', async () => {
+      app.commandLine.appendSwitch('foobar3', 'test');
+      expect(app.commandLine.hasSwitch('foobar3')).to.equal(true);
+      app.commandLine.removeSwitch('foobar3');
+      expect(app.commandLine.hasSwitch('foobar3')).to.equal(false);
+    });
+  });
+
   ifdescribe(process.platform === 'darwin')('app.setSecureKeyboardEntryEnabled', () => {
     it('changes Secure Keyboard Entry is enabled', () => {
       app.setSecureKeyboardEntryEnabled(true);
@@ -1612,10 +1829,61 @@ describe('app module', () => {
       expect(app.isSecureKeyboardEntryEnabled()).to.equal(false);
     });
   });
+
+  describe('configureHostResolver', () => {
+    after(() => {
+      // Returns to the default configuration.
+      app.configureHostResolver({});
+    });
+
+    it('fails on bad arguments', () => {
+      expect(() => {
+        (app.configureHostResolver as any)();
+      }).to.throw();
+      expect(() => {
+        app.configureHostResolver({
+          secureDnsMode: 'notAValidValue' as any
+        });
+      }).to.throw();
+      expect(() => {
+        app.configureHostResolver({
+          secureDnsServers: [123 as any]
+        });
+      }).to.throw();
+    });
+
+    it('affects dns lookup behavior', async () => {
+      // 1. resolve a domain name to check that things are working
+      await expect(new Promise((resolve, reject) => {
+        electronNet.request({
+          method: 'HEAD',
+          url: 'https://www.electronjs.org'
+        }).on('response', resolve)
+          .on('error', reject)
+          .end();
+      })).to.eventually.be.fulfilled();
+      // 2. change the host resolver configuration to something that will
+      // always fail
+      app.configureHostResolver({
+        secureDnsMode: 'secure',
+        secureDnsServers: ['https://127.0.0.1:1234']
+      });
+      // 3. check that resolving domain names now fails
+      await expect(new Promise((resolve, reject) => {
+        electronNet.request({
+          method: 'HEAD',
+          // Needs to be a slightly different domain to above, otherwise the
+          // response will come from the cache.
+          url: 'https://electronjs.org'
+        }).on('response', resolve)
+          .on('error', reject)
+          .end();
+      })).to.eventually.be.rejectedWith(/ERR_NAME_NOT_RESOLVED/);
+    });
+  });
 });
 
-// Running child app under ASan might receive SIGKILL because of OOM.
-ifdescribe(!process.env.IS_ASAN)('default behavior', () => {
+describe('default behavior', () => {
   describe('application menu', () => {
     it('creates the default menu if the app does not set it', async () => {
       const result = await runTestApp('default-menu');
@@ -1634,6 +1902,8 @@ ifdescribe(!process.env.IS_ASAN)('default behavior', () => {
   });
 
   describe('window-all-closed', () => {
+    afterEach(closeAllWindows);
+
     it('quits when the app does not handle the event', async () => {
       const result = await runTestApp('window-all-closed');
       expect(result).to.equal(false);
@@ -1642,6 +1912,17 @@ ifdescribe(!process.env.IS_ASAN)('default behavior', () => {
     it('does not quit when the app handles the event', async () => {
       const result = await runTestApp('window-all-closed', '--handle-event');
       expect(result).to.equal(true);
+    });
+
+    it('should omit closed windows from getAllWindows', async () => {
+      const w = new BrowserWindow({ show: false });
+      const len = new Promise(resolve => {
+        app.on('window-all-closed', () => {
+          resolve(BrowserWindow.getAllWindows().length);
+        });
+      });
+      w.close();
+      expect(await len).to.equal(0);
     });
   });
 
@@ -1669,26 +1950,6 @@ ifdescribe(!process.env.IS_ASAN)('default behavior', () => {
     });
   });
 
-  describe('app.allowRendererProcessReuse', () => {
-    it('should default to true', () => {
-      expect(app.allowRendererProcessReuse).to.equal(true);
-    });
-
-    it('should cause renderer processes to get new PIDs when false', async () => {
-      const output = await runTestApp('site-instance-overrides', 'false');
-      expect(output[0]).to.be.a('number').that.is.greaterThan(0);
-      expect(output[1]).to.be.a('number').that.is.greaterThan(0);
-      expect(output[0]).to.not.equal(output[1]);
-    });
-
-    it('should cause renderer processes to keep the same PID when true', async () => {
-      const output = await runTestApp('site-instance-overrides', 'true');
-      expect(output[0]).to.be.a('number').that.is.greaterThan(0);
-      expect(output[1]).to.be.a('number').that.is.greaterThan(0);
-      expect(output[0]).to.equal(output[1]);
-    });
-  });
-
   describe('login event', () => {
     afterEach(closeAllWindows);
     let server: http.Server;
@@ -1713,6 +1974,19 @@ ifdescribe(!process.env.IS_ASAN)('default behavior', () => {
       w.loadURL(serverUrl);
       const [, webContents] = await emittedOnce(app, 'login');
       expect(webContents).to.equal(w.webContents);
+    });
+  });
+
+  describe('running under ARM64 translation', () => {
+    it('does not throw an error', () => {
+      if (process.platform === 'darwin' || process.platform === 'win32') {
+        expect(app.runningUnderARM64Translation).not.to.be.undefined();
+        expect(() => {
+          return app.runningUnderARM64Translation;
+        }).not.to.throw();
+      } else {
+        expect(app.runningUnderARM64Translation).to.be.undefined();
+      }
     });
   });
 });

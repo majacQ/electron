@@ -18,20 +18,14 @@ an issue:
 
 ## Guides and Tutorials
 
-### Quickstart
+### Getting started
 
-* [Quick Start Guide](tutorial/quick-start.md)
-  * [Prerequisites](tutorial/quick-start.md#prerequisites)
-  * [Create a basic application](tutorial/quick-start.md#create-a-basic-application)
-  * [Run your application](tutorial/quick-start.md#run-your-application)
-  * [Package and distribute the application](tutorial/quick-start.md#package-and-distribute-the-application)
+* [Introduction](tutorial/introduction.md)
+* [Quick Start](tutorial/quick-start.md)
+* [Process Model](tutorial/process-model.md)
 
 ### Learning the basics
 
-* [Electron's Process Model](tutorial/quick-start.md#application-architecture)
-  * [Main and Renderer Processes](tutorial/quick-start.md#main-and-renderer-processes)
-  * [Electron API](tutorial/quick-start.md#electron-api)
-  * [Node.js API](tutorial/quick-start.md#nodejs-api)
 * Adding Features to Your App
   * [Notifications](tutorial/notifications.md)
   * [Recent Documents](tutorial/recent-documents.md)
@@ -59,17 +53,17 @@ an issue:
   * [Using Native Node.js Modules](tutorial/using-native-node-modules.md)
   * [Performance Strategies](tutorial/performance.md)
   * [Security Strategies](tutorial/security.md)
+  * [Process Sandboxing](tutorial/sandbox.md)
 * [Accessibility](tutorial/accessibility.md)
   * [Manually Enabling Accessibility Features](tutorial/accessibility.md#manually-enabling-accessibility-features)
 * [Testing and Debugging](tutorial/application-debugging.md)
   * [Debugging the Main Process](tutorial/debugging-main-process.md)
   * [Debugging with Visual Studio Code](tutorial/debugging-vscode.md)
-  * [Using Selenium and WebDriver](tutorial/using-selenium-and-webdriver.md)
   * [Testing on Headless CI Systems (Travis, Jenkins)](tutorial/testing-on-headless-ci.md)
   * [DevTools Extension](tutorial/devtools-extension.md)
-  * [Automated Testing with a Custom Driver](tutorial/automated-testing-with-a-custom-driver.md)
+  * [Automated Testing](tutorial/automated-testing.md)
+  * [REPL](tutorial/repl.md)
 * [Distribution](tutorial/application-distribution.md)
-  * [Supported Platforms](tutorial/support.md#supported-platforms)
   * [Code Signing](tutorial/code-signing.md)
   * [Mac App Store](tutorial/mac-app-store-submission-guide.md)
   * [Windows Store](tutorial/windows-store-guide.md)
@@ -111,7 +105,6 @@ These individual tutorials expand on topics discussed in the guide above.
 * [`File` Object](api/file-object.md)
 * [`<webview>` Tag](api/webview-tag.md)
 * [`window.open` Function](api/window-open.md)
-* [`BrowserWindowProxy` Object](api/browser-window-proxy.md)
 
 ### Modules for the Main Process:
 
@@ -126,6 +119,8 @@ These individual tutorials expand on topics discussed in the guide above.
 * [ipcMain](api/ipc-main.md)
 * [Menu](api/menu.md)
 * [MenuItem](api/menu-item.md)
+* [MessageChannelMain](api/message-channel-main.md)
+* [MessagePortMain](api/message-port-main.md)
 * [net](api/net.md)
 * [netLog](api/net-log.md)
 * [nativeTheme](api/native-theme.md)
@@ -135,6 +130,7 @@ These individual tutorials expand on topics discussed in the guide above.
 * [protocol](api/protocol.md)
 * [screen](api/screen.md)
 * [session](api/session.md)
+* [ShareMenu](api/share-menu.md)
 * [systemPreferences](api/system-preferences.md)
 * [TouchBar](api/touch-bar.md)
 * [Tray](api/tray.md)

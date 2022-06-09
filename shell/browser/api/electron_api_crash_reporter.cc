@@ -16,6 +16,7 @@
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
+#include "base/trace_event/trace_event.h"
 #include "chrome/common/chrome_paths.h"
 #include "components/upload_list/crash_upload_list.h"
 #include "components/upload_list/text_log_upload_list.h"
@@ -38,25 +39,26 @@
 #include "third_party/crashpad/crashpad/client/crashpad_info.h"  // nogncheck
 #endif
 
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
 #include "base/containers/span.h"
 #include "base/files/file_util.h"
 #include "base/guid.h"
 #include "components/crash/core/app/breakpad_linux.h"
 #include "components/crash/core/common/crash_keys.h"
+#include "components/upload_list/combining_upload_list.h"
 #include "v8/include/v8-wasm-trap-handler-posix.h"
 #include "v8/include/v8.h"
 #endif
 
 namespace {
 
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
 std::map<std::string, std::string>& GetGlobalCrashKeysMutable() {
   static base::NoDestructor<std::map<std::string, std::string>>
       global_crash_keys;
   return *global_crash_keys;
 }
-#endif  // defined(OS_LINUX)
+#endif  // BUILDFLAG(IS_LINUX)
 
 bool g_crash_reporter_initialized = false;
 
@@ -80,7 +82,7 @@ bool IsCrashReporterEnabled() {
   return g_crash_reporter_initialized;
 }
 
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
 const std::map<std::string, std::string>& GetGlobalCrashKeys() {
   return GetGlobalCrashKeysMutable();
 }
@@ -134,6 +136,7 @@ void Start(const std::string& submit_url,
            const std::map<std::string, std::string>& global_extra,
            const std::map<std::string, std::string>& extra,
            bool is_node_process) {
+  TRACE_EVENT0("electron", "crash_reporter::Start");
 #if !defined(MAS_BUILD)
   if (g_crash_reporter_initialized)
     return;
@@ -149,18 +152,31 @@ void Start(const std::string& submit_url,
       is_node_process
           ? "node"
           : command_line->GetSwitchValueASCII(::switches::kProcessType);
-#if defined(OS_LINUX)
-  ::crash_keys::SetMetricsClientIdFromGUID(GetClientId());
-  auto& global_crash_keys = GetGlobalCrashKeysMutable();
-  for (const auto& pair : global_extra) {
-    global_crash_keys[pair.first] = pair.second;
+#if BUILDFLAG(IS_LINUX)
+  if (::crash_reporter::IsCrashpadEnabled()) {
+    for (const auto& pair : extra)
+      electron::crash_keys::SetCrashKey(pair.first, pair.second);
+    {
+      base::ThreadRestrictions::ScopedAllowIO allow_io;
+      ::crash_reporter::InitializeCrashpad(process_type.empty(), process_type);
+    }
+    if (ignore_system_crash_handler) {
+      crashpad::CrashpadInfo::GetCrashpadInfo()
+          ->set_system_crash_reporter_forwarding(crashpad::TriState::kDisabled);
+    }
+  } else {
+    ::crash_keys::SetMetricsClientIdFromGUID(GetClientId());
+    auto& global_crash_keys = GetGlobalCrashKeysMutable();
+    for (const auto& pair : global_extra) {
+      global_crash_keys[pair.first] = pair.second;
+    }
+    for (const auto& pair : extra)
+      electron::crash_keys::SetCrashKey(pair.first, pair.second);
+    for (const auto& pair : global_extra)
+      electron::crash_keys::SetCrashKey(pair.first, pair.second);
+    breakpad::InitCrashReporter(process_type);
   }
-  for (const auto& pair : extra)
-    electron::crash_keys::SetCrashKey(pair.first, pair.second);
-  for (const auto& pair : global_extra)
-    electron::crash_keys::SetCrashKey(pair.first, pair.second);
-  breakpad::InitCrashReporter(process_type);
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_MAC)
   for (const auto& pair : extra)
     electron::crash_keys::SetCrashKey(pair.first, pair.second);
   ::crash_reporter::InitializeCrashpad(process_type.empty(), process_type);
@@ -168,11 +184,11 @@ void Start(const std::string& submit_url,
     crashpad::CrashpadInfo::GetCrashpadInfo()
         ->set_system_crash_reporter_forwarding(crashpad::TriState::kDisabled);
   }
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
   for (const auto& pair : extra)
     electron::crash_keys::SetCrashKey(pair.first, pair.second);
   base::FilePath user_data_dir;
-  base::PathService::Get(DIR_USER_DATA, &user_data_dir);
+  base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
   ::crash_reporter::InitializeCrashpadWithEmbeddedHandler(
       process_type.empty(), process_type,
       base::WideToUTF8(user_data_dir.value()), base::FilePath());
@@ -196,15 +212,28 @@ void GetUploadedReports(
 }
 #else
 scoped_refptr<UploadList> CreateCrashUploadList() {
-#if defined(OS_MAC) || defined(OS_WIN)
-  return new CrashUploadListCrashpad();
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
+  return base::MakeRefCounted<CrashUploadListCrashpad>();
 #else
   base::FilePath crash_dir_path;
   base::PathService::Get(electron::DIR_CRASH_DUMPS, &crash_dir_path);
   base::FilePath upload_log_path =
       crash_dir_path.AppendASCII(CrashUploadList::kReporterLogFilename);
-  return new TextLogUploadList(upload_log_path);
-#endif  // defined(OS_MAC) || defined(OS_WIN)
+  scoped_refptr<UploadList> result =
+      base::MakeRefCounted<TextLogUploadList>(upload_log_path);
+  if (crash_reporter::IsCrashpadEnabled()) {
+    // Crashpad keeps the records of C++ crashes (segfaults, etc) in its
+    // internal database. The JavaScript error reporter writes JS error upload
+    // records to the older text format. Combine the two to present a complete
+    // list to the user.
+    // TODO(nornagon): what is "The JavaScript error reporter", and do we care
+    // about it?
+    std::vector<scoped_refptr<UploadList>> uploaders = {
+        base::MakeRefCounted<CrashUploadListCrashpad>(), std::move(result)};
+    result = base::MakeRefCounted<CombiningUploadList>(std::move(uploaders));
+  }
+  return result;
+#endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
 }
 
 v8::Local<v8::Value> GetUploadedReports(v8::Isolate* isolate) {

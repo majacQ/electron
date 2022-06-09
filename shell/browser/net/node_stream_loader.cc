@@ -30,7 +30,6 @@ NodeStreamLoader::NodeStreamLoader(
 }
 
 NodeStreamLoader::~NodeStreamLoader() {
-  v8::Locker locker(isolate_);
   v8::Isolate::Scope isolate_scope(isolate_);
   v8::HandleScope handle_scope(isolate_);
 
@@ -59,8 +58,7 @@ void NodeStreamLoader::Start(network::mojom::URLResponseHeadPtr head) {
   }
 
   producer_ = std::make_unique<mojo::DataPipeProducer>(std::move(producer));
-  client_->OnReceiveResponse(std::move(head));
-  client_->OnStartLoadingResponseBody(std::move(consumer));
+  client_->OnReceiveResponse(std::move(head), std::move(consumer));
 
   auto weak = weak_factory_.GetWeakPtr();
   On("end",
@@ -153,7 +151,6 @@ void NodeStreamLoader::DidWrite(MojoResult result) {
 }
 
 void NodeStreamLoader::On(const char* event, EventCallback callback) {
-  v8::Locker locker(isolate_);
   v8::Isolate::Scope isolate_scope(isolate_);
   v8::HandleScope handle_scope(isolate_);
 
@@ -165,7 +162,7 @@ void NodeStreamLoader::On(const char* event, EventCallback callback) {
   handlers_[event].Reset(isolate_, args[1]);
   node::MakeCallback(isolate_, emitter_.Get(isolate_), "on",
                      node::arraysize(args), args, {0, 0});
-  // No more code bellow, as this class may destruct when subscribing.
+  // No more code below, as this class may destruct when subscribing.
 }
 
 }  // namespace electron

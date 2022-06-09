@@ -12,13 +12,219 @@ This document uses the following convention to categorize breaking changes:
 * **Deprecated:** An API was marked as deprecated. The API will continue to function, but will emit a deprecation warning, and will be removed in a future release.
 * **Removed:** An API or feature was removed, and is no longer supported by Electron.
 
+## Planned Breaking API Changes (20.0)
+
+### API Changed: `webContents.printToPDF()`
+
+`webContents.printToPDF()` has been modified to conform to [`Page.printToPDF`](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-printToPDF) in the Chrome DevTools Protocol. This has been changes in order to
+address changes upstream that made our previous implementation untenable and rife with bugs.
+
+**Arguments Changed**
+
+* `pageRanges`
+
+**Arguments Removed**
+
+* `printSelectionOnly`
+* `marginsType`
+* `headerFooter`
+* `scaleFactor`
+
+**Arguments Added**
+
+* `headerTemplate`
+* `footerTemplate`
+* `displayHeaderFooter`
+* `margins`
+* `scale`
+* `preferCSSPageSize`
+
+```js
+// Main process
+const { webContents } = require('electron')
+
+webContents.printToPDF({
+  landscape: true,
+  displayHeaderFooter: true,
+  printBackground: true,
+  scale: 2,
+  pageSize: 'Ledger',
+  margins: {
+    top: 2,
+    bottom: 2,
+    left: 2,
+    right: 2
+  },
+  pageRanges: '1-5, 8, 11-13',
+  headerTemplate: '<h1>Title</h1>',
+  footerTemplate: '<div><span class="pageNumber"></span></div>',
+  preferCSSPageSize: true
+}).then(data => {
+  fs.writeFile(pdfPath, data, (error) => {
+    if (error) throw error
+    console.log(`Wrote PDF successfully to ${pdfPath}`)
+  })
+}).catch(error => {
+  console.log(`Failed to write PDF to ${pdfPath}: `, error)
+})
+```
+
+### Default Changed: renderers without `nodeIntegration: true` are sandboxed by default
+
+Previously, renderers that specified a preload script defaulted to being
+unsandboxed. This meant that by default, preload scripts had access to Node.js.
+In Electron 20, this default has changed. Beginning in Electron 20, renderers
+will be sandboxed by default, unless `nodeIntegration: true` or `sandbox: false`
+is specified.
+
+If your preload scripts do not depend on Node, no action is needed. If your
+preload scripts _do_ depend on Node, either refactor them to remove Node usage
+from the renderer, or explicitly specify `sandbox: false` for the relevant
+renderers.
+
+### Removed: `skipTaskbar` on Linux
+
+On X11, `skipTaskbar` sends a `_NET_WM_STATE_SKIP_TASKBAR` message to the X11
+window manager. There is not a direct equivalent for Wayland, and the known
+workarounds have unacceptable tradeoffs (e.g. Window.is_skip_taskbar in GNOME
+requires unsafe mode), so Electron is unable to support this feature on Linux.
+
+## Planned Breaking API Changes (19.0)
+
+None
+
+## Planned Breaking API Changes (18.0)
+
+### Removed: `nativeWindowOpen`
+
+Prior to Electron 15, `window.open` was by default shimmed to use
+`BrowserWindowProxy`. This meant that `window.open('about:blank')` did not work
+to open synchronously scriptable child windows, among other incompatibilities.
+Since Electron 15, `nativeWindowOpen` has been enabled by default.
+
+See the documentation for [window.open in Electron](api/window-open.md)
+for more details.
+
+## Planned Breaking API Changes (17.0)
+
+### Removed: `desktopCapturer.getSources` in the renderer
+
+The `desktopCapturer.getSources` API is now only available in the main process.
+This has been changed in order to improve the default security of Electron
+apps.
+
+If you need this functionality, it can be replaced as follows:
+
+```js
+// Main process
+const { ipcMain, desktopCapturer } = require('electron')
+
+ipcMain.handle(
+  'DESKTOP_CAPTURER_GET_SOURCES',
+  (event, opts) => desktopCapturer.getSources(opts)
+)
+```
+
+```js
+// Renderer process
+const { ipcRenderer } = require('electron')
+
+const desktopCapturer = {
+  getSources: (opts) => ipcRenderer.invoke('DESKTOP_CAPTURER_GET_SOURCES', opts)
+}
+```
+
+However, you should consider further restricting the information returned to
+the renderer; for instance, displaying a source selector to the user and only
+returning the selected source.
+
+### Deprecated: `nativeWindowOpen`
+
+Prior to Electron 15, `window.open` was by default shimmed to use
+`BrowserWindowProxy`. This meant that `window.open('about:blank')` did not work
+to open synchronously scriptable child windows, among other incompatibilities.
+Since Electron 15, `nativeWindowOpen` has been enabled by default.
+
+See the documentation for [window.open in Electron](api/window-open.md)
+for more details.
+
+## Planned Breaking API Changes (16.0)
+
+### Behavior Changed: `crashReporter` implementation switched to Crashpad on Linux
+
+The underlying implementation of the `crashReporter` API on Linux has changed
+from Breakpad to Crashpad, bringing it in line with Windows and Mac. As a
+result of this, child processes are now automatically monitored, and calling
+`process.crashReporter.start` in Node child processes is no longer needed (and
+is not advisable, as it will start a second instance of the Crashpad reporter).
+
+There are also some subtle changes to how annotations will be reported on
+Linux, including that long values will no longer be split between annotations
+appended with `__1`, `__2` and so on, and instead will be truncated at the
+(new, longer) annotation value limit.
+
+### Deprecated: `desktopCapturer.getSources` in the renderer
+
+Usage of the `desktopCapturer.getSources` API in the renderer has been
+deprecated and will be removed. This change improves the default security of
+Electron apps.
+
+See [here](#removed-desktopcapturergetsources-in-the-renderer) for details on
+how to replace this API in your app.
+
+## Planned Breaking API Changes (15.0)
+
+### Default Changed: `nativeWindowOpen` defaults to `true`
+
+Prior to Electron 15, `window.open` was by default shimmed to use
+`BrowserWindowProxy`. This meant that `window.open('about:blank')` did not work
+to open synchronously scriptable child windows, among other incompatibilities.
+`nativeWindowOpen` is no longer experimental, and is now the default.
+
+See the documentation for [window.open in Electron](api/window-open.md)
+for more details.
+
 ## Planned Breaking API Changes (14.0)
+
+### Removed: `remote` module
+
+The `remote` module was deprecated in Electron 12, and will be removed in
+Electron 14. It is replaced by the
+[`@electron/remote`](https://github.com/electron/remote) module.
+
+```js
+// Deprecated in Electron 12:
+const { BrowserWindow } = require('electron').remote
+```
+
+```js
+// Replace with:
+const { BrowserWindow } = require('@electron/remote')
+
+// In the main process:
+require('@electron/remote/main').initialize()
+```
+
+### Removed: `app.allowRendererProcessReuse`
+
+The `app.allowRendererProcessReuse` property will be removed as part of our plan to
+more closely align with Chromium's process model for security, performance and maintainability.
+
+For more detailed information see [#18397](https://github.com/electron/electron/issues/18397).
+
+### Removed: Browser Window Affinity
+
+The `affinity` option when constructing a new `BrowserWindow` will be removed
+as part of our plan to more closely align with Chromium's process model for security,
+performance and maintainability.
+
+For more detailed information see [#18397](https://github.com/electron/electron/issues/18397).
 
 ### API Changed: `window.open()`
 
 The optional parameter `frameName` will no longer set the title of the window. This now follows the specification described by the [native documentation](https://developer.mozilla.org/en-US/docs/Web/API/Window/open#parameters) under the corresponding parameter `windowName`.
 
-If you were using this parameter to set the title of a window, you can instead use [win.setTitle(title)](https://www.electronjs.org/docs/api/browser-window#winsettitletitle).
+If you were using this parameter to set the title of a window, you can instead use [win.setTitle(title)](api/browser-window.md#winsettitletitle).
 
 ### Removed: `worldSafeExecuteJavaScript`
 
@@ -27,6 +233,53 @@ ensure your code works with this property enabled.  It has been enabled by defau
 12.
 
 You will be affected by this change if you use either `webFrame.executeJavaScript` or `webFrame.executeJavaScriptInIsolatedWorld`. You will need to ensure that values returned by either of those methods are supported by the [Context Bridge API](api/context-bridge.md#parameter--error--return-type-support) as these methods use the same value passing semantics.
+
+### Removed: BrowserWindowConstructorOptions inheriting from parent windows
+
+Prior to Electron 14, windows opened with `window.open` would inherit
+BrowserWindow constructor options such as `transparent` and `resizable` from
+their parent window. Beginning with Electron 14, this behavior is removed, and
+windows will not inherit any BrowserWindow constructor options from their
+parents.
+
+Instead, explicitly set options for the new window with `setWindowOpenHandler`:
+
+```js
+webContents.setWindowOpenHandler((details) => {
+  return {
+    action: 'allow',
+    overrideBrowserWindowOptions: {
+      // ...
+    }
+  }
+})
+```
+
+### Removed: `additionalFeatures`
+
+The deprecated `additionalFeatures` property in the `new-window` and
+`did-create-window` events of WebContents has been removed. Since `new-window`
+uses positional arguments, the argument is still present, but will always be
+the empty array `[]`. (Though note, the `new-window` event itself is
+deprecated, and is replaced by `setWindowOpenHandler`.) Bare keys in window
+features will now present as keys with the value `true` in the options object.
+
+```js
+// Removed in Electron 14
+// Triggered by window.open('...', '', 'my-key')
+webContents.on('did-create-window', (window, details) => {
+  if (details.additionalFeatures.includes('my-key')) {
+    // ...
+  }
+})
+
+// Replace with
+webContents.on('did-create-window', (window, details) => {
+  if (details.options['my-key']) {
+    // ...
+  }
+})
+```
 
 ## Planned Breaking API Changes (13.0)
 
@@ -136,6 +389,22 @@ systemPreferences.isHighContrastColorScheme()
 nativeTheme.shouldUseHighContrastColors
 ```
 
+### Deprecated: WebContents `new-window` event
+
+The `new-window` event of WebContents has been deprecated. It is replaced by [`webContents.setWindowOpenHandler()`](api/web-contents.md#contentssetwindowopenhandlerhandler).
+
+```js
+// Deprecated in Electron 13
+webContents.on('new-window', (event) => {
+  event.preventDefault()
+})
+
+// Replace with
+webContents.setWindowOpenHandler((details) => {
+  return { action: 'deny' }
+})
+```
+
 ## Planned Breaking API Changes (12.0)
 
 ### Removed: Pepper Flash support
@@ -158,7 +427,7 @@ value.
 In Electron 12, `contextIsolation` will be enabled by default.  To restore
 the previous behavior, `contextIsolation: false` must be specified in WebPreferences.
 
-We [recommend having contextIsolation enabled](https://github.com/electron/electron/blob/master/docs/tutorial/security.md#3-enable-context-isolation-for-remote-content) for the security of your application.
+We [recommend having contextIsolation enabled](tutorial/security.md#3-enable-context-isolation) for the security of your application.
 
 Another implication is that `require()` cannot be used in the renderer process unless
 `nodeIntegration` is `true` and `contextIsolation` is `false`.
@@ -297,14 +566,6 @@ See [#23265](https://github.com/electron/electron/pull/23265) for more details.
 Setting `{ compress: false }` in `crashReporter.start` is deprecated. Nearly
 all crash ingestion servers support gzip compression. This option will be
 removed in a future version of Electron.
-
-### Removed: Browser Window Affinity
-
-The `affinity` option when constructing a new `BrowserWindow` will be removed
-as part of our plan to more closely align with Chromium's process model for security,
-performance and maintainability.
-
-For more detailed information see [#18397](https://github.com/electron/electron/issues/18397).
 
 ### Default Changed: `enableRemoteModule` defaults to `false`
 
@@ -476,7 +737,7 @@ error.
 ### API Changed: `shell.openItem` is now `shell.openPath`
 
 The `shell.openItem` API has been replaced with an asynchronous `shell.openPath` API.
-You can see the original API proposal and reasoning [here](https://github.com/electron/governance/blob/master/wg-api/spec-documents/shell-openitem.md).
+You can see the original API proposal and reasoning [here](https://github.com/electron/governance/blob/main/wg-api/spec-documents/shell-openitem.md).
 
 ## Planned Breaking API Changes (8.0)
 
@@ -729,7 +990,7 @@ In Electron 7, this now returns a `FileList` with a `File` object for:
 
 Note that `webkitdirectory` no longer exposes the path to the selected folder.
 If you require the path to the selected folder rather than the folder contents,
-see the `dialog.showOpenDialog` API ([link](https://github.com/electron/electron/blob/master/docs/api/dialog.md#dialogshowopendialogbrowserwindow-options)).
+see the `dialog.showOpenDialog` API ([link](api/dialog.md#dialogshowopendialogbrowserwindow-options)).
 
 ### API Changed: Callback-based versions of promisified APIs
 

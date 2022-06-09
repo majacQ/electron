@@ -2,24 +2,23 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_ELECTRON_BROWSER_CONTEXT_H_
-#define SHELL_BROWSER_ELECTRON_BROWSER_CONTEXT_H_
+#ifndef ELECTRON_SHELL_BROWSER_ELECTRON_BROWSER_CONTEXT_H_
+#define ELECTRON_SHELL_BROWSER_ELECTRON_BROWSER_CONTEXT_H_
 
 #include <map>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/predictors/preconnect_manager.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/resource_context.h"
 #include "electron/buildflags/buildflags.h"
+#include "mojo/public/cpp/bindings/remote.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "shell/browser/media/media_device_id_salt.h"
 
-class PrefRegistrySimple;
 class PrefService;
 class ValueMapPrefStore;
 
@@ -44,14 +43,15 @@ class ElectronDownloadManagerDelegate;
 class ElectronPermissionManager;
 class CookieChangeNotifier;
 class ResolveProxyHelper;
-class SpecialStoragePolicy;
 class WebViewManager;
 class ProtocolRegistry;
 
-class ElectronBrowserContext
-    : public content::BrowserContext,
-      public network::mojom::TrustedURLLoaderAuthClient {
+class ElectronBrowserContext : public content::BrowserContext {
  public:
+  // disable copy
+  ElectronBrowserContext(const ElectronBrowserContext&) = delete;
+  ElectronBrowserContext& operator=(const ElectronBrowserContext&) = delete;
+
   // partition_id => browser_context
   struct PartitionKey {
     std::string partition;
@@ -106,6 +106,8 @@ class ElectronBrowserContext
   std::string GetMediaDeviceIDSalt() override;
   content::DownloadManagerDelegate* GetDownloadManagerDelegate() override;
   content::BrowserPluginGuestManager* GetGuestManager() override;
+  content::PlatformNotificationService* GetPlatformNotificationService()
+      override;
   content::PermissionControllerDelegate* GetPermissionControllerDelegate()
       override;
   storage::SpecialStoragePolicy* GetSpecialStoragePolicy() override;
@@ -113,6 +115,7 @@ class ElectronBrowserContext
       override;
   content::StorageNotificationService* GetStorageNotificationService() override;
 
+  const base::FilePath& cache_path() const { return cache_path_; }
   CookieChangeNotifier* cookie_change_notifier() const {
     return cookie_change_notifier_.get();
   }
@@ -151,10 +154,6 @@ class ElectronBrowserContext
                          bool in_memory,
                          base::DictionaryValue options);
 
-  void OnLoaderCreated(int32_t request_id,
-                       mojo::PendingReceiver<network::mojom::TrustedAuthClient>
-                           header_client) override;
-
   // Initialize pref registry.
   void InitPrefs();
 
@@ -174,6 +173,7 @@ class ElectronBrowserContext
 
   std::string user_agent_;
   base::FilePath path_;
+  base::FilePath cache_path_;
   bool in_memory_ = false;
   bool use_cache_ = true;
   int max_cache_size_ = 0;
@@ -185,16 +185,13 @@ class ElectronBrowserContext
 
   // Shared URLLoaderFactory.
   scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-  mojo::Receiver<network::mojom::TrustedURLLoaderAuthClient> auth_client_{this};
 
   network::mojom::SSLConfigPtr ssl_config_;
   mojo::Remote<network::mojom::SSLConfigClient> ssl_config_client_;
 
   base::WeakPtrFactory<ElectronBrowserContext> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ElectronBrowserContext);
 };
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_ELECTRON_BROWSER_CONTEXT_H_
+#endif  // ELECTRON_SHELL_BROWSER_ELECTRON_BROWSER_CONTEXT_H_

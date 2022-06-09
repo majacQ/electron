@@ -2,23 +2,25 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_NATIVE_WINDOW_OBSERVER_H_
-#define SHELL_BROWSER_NATIVE_WINDOW_OBSERVER_H_
+#ifndef ELECTRON_SHELL_BROWSER_NATIVE_WINDOW_OBSERVER_H_
+#define ELECTRON_SHELL_BROWSER_NATIVE_WINDOW_OBSERVER_H_
 
 #include <string>
 
 #include "base/observer_list_types.h"
 #include "base/values.h"
 #include "ui/base/window_open_disposition.h"
-#include "url/gurl.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #endif
 
+class GURL;
+
 namespace gfx {
 class Rect;
-}
+enum class ResizeEdge;
+}  // namespace gfx
 
 namespace electron {
 
@@ -71,6 +73,7 @@ class NativeWindowObserver : public base::CheckedObserver {
   virtual void OnWindowMinimize() {}
   virtual void OnWindowRestore() {}
   virtual void OnWindowWillResize(const gfx::Rect& new_bounds,
+                                  const gfx::ResizeEdge& edge,
                                   bool* prevent_default) {}
   virtual void OnWindowResize() {}
   virtual void OnWindowResized() {}
@@ -95,15 +98,17 @@ class NativeWindowObserver : public base::CheckedObserver {
   virtual void OnSystemContextMenu(int x, int y, bool* prevent_default) {}
 
 // Called when window message received
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   virtual void OnWindowMessage(UINT message, WPARAM w_param, LPARAM l_param) {}
 #endif
 
   // Called on Windows when App Commands arrive (WM_APPCOMMAND)
   // Some commands are implemented on on other platforms as well
   virtual void OnExecuteAppCommand(const std::string& command_name) {}
+
+  virtual void UpdateWindowControlsOverlay(const gfx::Rect& bounding_rect) {}
 };
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_NATIVE_WINDOW_OBSERVER_H_
+#endif  // ELECTRON_SHELL_BROWSER_NATIVE_WINDOW_OBSERVER_H_

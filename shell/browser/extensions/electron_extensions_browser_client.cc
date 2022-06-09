@@ -4,12 +4,12 @@
 
 #include "shell/browser/extensions/electron_extensions_browser_client.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
-#include "base/task/post_task.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/chrome_url_request_util.h"
 #include "chrome/common/chrome_paths.h"
@@ -57,14 +57,15 @@ using extensions::ExtensionsBrowserClient;
 namespace electron {
 
 ElectronExtensionsBrowserClient::ElectronExtensionsBrowserClient()
-    : api_client_(new extensions::ElectronExtensionsAPIClient),
-      process_manager_delegate_(new extensions::ElectronProcessManagerDelegate),
-      extension_cache_(new extensions::NullExtensionCache()) {
+    : api_client_(std::make_unique<extensions::ElectronExtensionsAPIClient>()),
+      process_manager_delegate_(
+          std::make_unique<extensions::ElectronProcessManagerDelegate>()),
+      extension_cache_(std::make_unique<extensions::NullExtensionCache>()) {
   // Electron does not have a concept of channel, so leave UNKNOWN to
   // enable all channel-dependent extension APIs.
   extensions::SetCurrentChannel(version_info::Channel::UNKNOWN);
-  resource_manager_.reset(
-      new extensions::ElectronComponentExtensionResourceManager());
+  resource_manager_ =
+      std::make_unique<extensions::ElectronComponentExtensionResourceManager>();
 
   AddAPIProvider(
       std::make_unique<extensions::CoreExtensionsBrowserAPIProvider>());
@@ -72,7 +73,7 @@ ElectronExtensionsBrowserClient::ElectronExtensionsBrowserClient()
       std::make_unique<extensions::ElectronExtensionsBrowserAPIProvider>());
 }
 
-ElectronExtensionsBrowserClient::~ElectronExtensionsBrowserClient() {}
+ElectronExtensionsBrowserClient::~ElectronExtensionsBrowserClient() = default;
 
 bool ElectronExtensionsBrowserClient::IsShuttingDown() {
   return electron::Browser::Get()->is_shutting_down();
@@ -170,12 +171,11 @@ void ElectronExtensionsBrowserClient::LoadResourceFromResourceBundle(
     mojo::PendingReceiver<network::mojom::URLLoader> loader,
     const base::FilePath& resource_relative_path,
     int resource_id,
-    const std::string& content_security_policy,
-    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
-    bool send_cors_header) {
+    scoped_refptr<net::HttpResponseHeaders> headers,
+    mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
   extensions::chrome_url_request_util::LoadResourceFromResourceBundle(
       request, std::move(loader), resource_relative_path, resource_id,
-      content_security_policy, std::move(client), send_cors_header);
+      std::move(headers), std::move(client));
 }
 
 namespace {
@@ -246,7 +246,7 @@ ElectronExtensionsBrowserClient::GetProcessManagerDelegate() const {
 std::unique_ptr<extensions::ExtensionHostDelegate>
 ElectronExtensionsBrowserClient::
     CreateExtensionHostDelegate() {  // TODO(samuelmaddock):
-  return base::WrapUnique(new extensions::ElectronExtensionHostDelegate);
+  return std::make_unique<extensions::ElectronExtensionHostDelegate>();
 }
 
 bool ElectronExtensionsBrowserClient::DidVersionUpdate(
@@ -298,11 +298,11 @@ ElectronExtensionsBrowserClient::GetComponentExtensionResourceManager() {
 void ElectronExtensionsBrowserClient::BroadcastEventToRenderers(
     extensions::events::HistogramValue histogram_value,
     const std::string& event_name,
-    std::unique_ptr<base::ListValue> args,
+    base::Value::List args,
     bool dispatch_to_off_the_record_profiles) {
   if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
-    base::PostTask(
-        FROM_HERE, {BrowserThread::UI},
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE,
         base::BindOnce(
             &ElectronExtensionsBrowserClient::BroadcastEventToRenderers,
             base::Unretained(this), histogram_value, event_name,
@@ -310,8 +310,11 @@ void ElectronExtensionsBrowserClient::BroadcastEventToRenderers(
     return;
   }
 
-  std::unique_ptr<extensions::Event> event(
-      new extensions::Event(histogram_value, event_name, std::move(args)));
+  std::vector<base::Value> event_args(args.size());
+  std::transform(args.begin(), args.end(), event_args.begin(),
+                 [](const base::Value& arg) { return arg.Clone(); });
+  auto event = std::make_unique<extensions::Event>(histogram_value, event_name,
+                                                   std::move(event_args));
   auto& context_map = ElectronBrowserContext::browser_context_map();
   for (auto const& entry : context_map) {
     if (entry.second) {
@@ -349,7 +352,7 @@ ElectronExtensionsBrowserClient::GetExtensionWebContentsObserver(
 
 extensions::KioskDelegate* ElectronExtensionsBrowserClient::GetKioskDelegate() {
   if (!kiosk_delegate_)
-    kiosk_delegate_.reset(new ElectronKioskDelegate());
+    kiosk_delegate_ = std::make_unique<ElectronKioskDelegate>();
   return kiosk_delegate_.get();
 }
 

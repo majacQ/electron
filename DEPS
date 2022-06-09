@@ -1,26 +1,14 @@
-gclient_gn_args_file = 'src/build/config/gclient_args.gni'
-gclient_gn_args = [
-  'build_with_chromium',
-  'checkout_android',
-  'checkout_android_native_support',
-  'checkout_libaom',
-  'checkout_nacl',
-  'checkout_pgo_profiles',
-  'checkout_oculus_sdk',
-  'checkout_openxr',
-  'checkout_google_benchmark',
-  'mac_xcode_version',
-]
+gclient_gn_args_from = 'src'
 
 vars = {
   'chromium_version':
-    '91.0.4448.0',
+    '104.0.5073.0',
   'node_version':
-    'v14.16.0',
+    'v16.15.1',
   'nan_version':
-    'v2.14.2',
+    '16fa32231e2ccd89d2804b3f765319128b20c4ac',
   'squirrel.mac_version':
-    'cdc0729c8bf8576bfef18629186e1e9ecf1b0d9f',
+    '0e5d146ba13101a1302d59ea6e6e0b3cace4ae38',
 
   'pyyaml_version': '3.12',
 
@@ -51,6 +39,8 @@ vars = {
   'use_rts': False,
 
   'mac_xcode_version': 'default',
+
+  'generate_location_tags': False,
 
   # To allow running hooks without parsing the DEPS tree
   'process_deps': True,
@@ -88,7 +78,7 @@ deps = {
     'url': (Var("nodejs_git")) + '/node.git@' + (Var("node_version")),
     'condition': 'checkout_node and process_deps',
   },
-  'src/electron/vendor/pyyaml': {
+  'src/third_party/pyyaml': {
     'url': (Var("yaml_git")) + '/pyyaml.git@' + (Var("pyyaml_version")),
     'condition': 'checkout_pyyaml and process_deps',
   },

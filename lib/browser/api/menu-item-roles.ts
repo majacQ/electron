@@ -5,7 +5,8 @@ const isWindows = process.platform === 'win32';
 const isLinux = process.platform === 'linux';
 
 type RoleId = 'about' | 'close' | 'copy' | 'cut' | 'delete' | 'forcereload' | 'front' | 'help' | 'hide' | 'hideothers' | 'minimize' |
-  'paste' | 'pasteandmatchstyle' | 'quit' | 'redo' | 'reload' | 'resetzoom' | 'selectall' | 'services' | 'recentdocuments' | 'clearrecentdocuments' | 'startspeaking' | 'stopspeaking' |
+  'paste' | 'pasteandmatchstyle' | 'quit' | 'redo' | 'reload' | 'resetzoom' | 'selectall' | 'services' | 'recentdocuments' | 'clearrecentdocuments' |
+  'showsubstitutions' | 'togglesmartquotes' | 'togglesmartdashes' | 'toggletextreplacement' | 'startspeaking' | 'stopspeaking' |
   'toggledevtools' | 'togglefullscreen' | 'undo' | 'unhide' | 'window' | 'zoom' | 'zoomin' | 'zoomout' | 'togglespellchecker' |
   'appmenu' | 'filemenu' | 'editmenu' | 'viewmenu' | 'windowmenu' | 'sharemenu'
 interface Role {
@@ -133,6 +134,18 @@ export const roleList: Record<RoleId, Role> = {
   clearrecentdocuments: {
     label: 'Clear Menu'
   },
+  showsubstitutions: {
+    label: 'Show Substitutions'
+  },
+  togglesmartquotes: {
+    label: 'Smart Quotes'
+  },
+  togglesmartdashes: {
+    label: 'Smart Dashes'
+  },
+  toggletextreplacement: {
+    label: 'Text Replacement'
+  },
   startspeaking: {
     label: 'Start Speaking'
   },
@@ -143,7 +156,10 @@ export const roleList: Record<RoleId, Role> = {
     label: 'Toggle Developer Tools',
     accelerator: isMac ? 'Alt+Command+I' : 'Ctrl+Shift+I',
     nonNativeMacOSRole: true,
-    windowMethod: w => w.webContents.toggleDevTools()
+    webContentsMethod: wc => {
+      const bw = wc.getOwnerBrowserWindow();
+      if (bw) bw.webContents.toggleDevTools();
+    }
   },
   togglefullscreen: {
     label: 'Toggle Full Screen',
@@ -234,6 +250,16 @@ export const roleList: Record<RoleId, Role> = {
         { role: 'delete' },
         { role: 'selectAll' },
         { type: 'separator' },
+        {
+          label: 'Substitutions',
+          submenu: [
+            { role: 'showSubstitutions' },
+            { type: 'separator' },
+            { role: 'toggleSmartQuotes' },
+            { role: 'toggleSmartDashes' },
+            { role: 'toggleTextReplacement' }
+          ]
+        },
         {
           label: 'Speech',
           submenu: [

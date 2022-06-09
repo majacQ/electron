@@ -7,7 +7,7 @@ const { emittedOnce, waitForEvent } = require('./events-helpers');
 const { ifdescribe, ifit, delay } = require('./spec-helpers');
 
 const features = process._linkedBinding('electron_common_features');
-const nativeModulesEnabled = process.env.ELECTRON_SKIP_NATIVE_MODULE_TESTS;
+const nativeModulesEnabled = !process.env.ELECTRON_SKIP_NATIVE_MODULE_TESTS;
 
 /* Most of the APIs here don't use standard callbacks */
 /* eslint-disable standard/no-callback-literal */
@@ -267,6 +267,24 @@ describe('<webview> tag', function () {
       expect(args).to.deep.equal([message]);
     });
 
+    it('<webview>.sendToFrame()', async () => {
+      loadWebView(webview, {
+        nodeintegration: 'on',
+        webpreferences: 'contextIsolation=no',
+        preload: `${fixtures}/module/preload-ipc.js`,
+        src: `file://${fixtures}/pages/ipc-message.html`
+      });
+
+      const { frameId } = await waitForEvent(webview, 'ipc-message');
+
+      const message = 'boom!';
+      webview.sendToFrame(frameId, 'ping', message);
+
+      const { channel, args } = await waitForEvent(webview, 'ipc-message');
+      expect(channel).to.equal('pong');
+      expect(args).to.deep.equal([message]);
+    });
+
     it('works without script tag in page', async () => {
       const message = await startLoadingWebViewAndWaitForMessage(webview, {
         preload: `${fixtures}/module/preload.js`,
@@ -472,7 +490,6 @@ describe('<webview> tag', function () {
 
     generateSpecs('without sandbox');
     generateSpecs('with sandbox', 'sandbox=yes');
-    generateSpecs('with nativeWindowOpen', 'nativeWindowOpen=yes');
   });
 
   describe('webpreferences attribute', () => {
@@ -501,7 +518,8 @@ describe('<webview> tag', function () {
   describe('new-window event', () => {
     it('emits when window.open is called', async () => {
       loadWebView(webview, {
-        src: `file://${fixtures}/pages/window-open.html`
+        src: `file://${fixtures}/pages/window-open.html`,
+        allowpopups: true
       });
       const { url, frameName } = await waitForEvent(webview, 'new-window');
 
@@ -511,7 +529,8 @@ describe('<webview> tag', function () {
 
     it('emits when link with target is called', async () => {
       loadWebView(webview, {
-        src: `file://${fixtures}/pages/target-name.html`
+        src: `file://${fixtures}/pages/target-name.html`,
+        allowpopups: true
       });
       const { url, frameName } = await waitForEvent(webview, 'new-window');
 
@@ -527,8 +546,9 @@ describe('<webview> tag', function () {
         webpreferences: 'contextIsolation=no',
         src: `file://${fixtures}/pages/ipc-message.html`
       });
-      const { channel, args } = await waitForEvent(webview, 'ipc-message');
+      const { frameId, channel, args } = await waitForEvent(webview, 'ipc-message');
 
+      expect(frameId).to.be.an('array').that.has.lengthOf(2);
       expect(channel).to.equal('channel');
       expect(args).to.deep.equal(['arg1', 'arg2']);
     });
@@ -559,6 +579,45 @@ describe('<webview> tag', function () {
       } else {
         expect(favicons[0]).to.equal('file:///favicon.png');
       }
+    });
+  });
+
+  describe('did-redirect-navigation event', () => {
+    let server = null;
+    let uri = null;
+
+    before((done) => {
+      server = http.createServer((req, res) => {
+        if (req.url === '/302') {
+          res.setHeader('Location', '/200');
+          res.statusCode = 302;
+          res.end();
+        } else {
+          res.end();
+        }
+      });
+      server.listen(0, '127.0.0.1', () => {
+        uri = `http://127.0.0.1:${(server.address()).port}`;
+        done();
+      });
+    });
+
+    after(() => {
+      server.close();
+    });
+
+    it('is emitted on redirects', async () => {
+      loadWebView(webview, {
+        src: `${uri}/302`
+      });
+
+      const event = await waitForEvent(webview, 'did-redirect-navigation');
+
+      expect(event.url).to.equal(`${uri}/200`);
+      expect(event.isInPlace).to.be.false();
+      expect(event.isMainFrame).to.be.true();
+      expect(event.frameProcessId).to.be.a('number');
+      expect(event.frameRoutingId).to.be.a('number');
     });
   });
 
@@ -851,20 +910,6 @@ describe('<webview> tag', function () {
   });
 
   describe('executeJavaScript', () => {
-    it('should support user gesture', async () => {
-      await loadWebView(webview, {
-        src: `file://${fixtures}/pages/fullscreen.html`
-      });
-
-      // Event handler has to be added before js execution.
-      const waitForEnterHtmlFullScreen = waitForEvent(webview, 'enter-html-full-screen');
-
-      const jsScript = "document.querySelector('video').webkitRequestFullscreen()";
-      webview.executeJavaScript(jsScript, true);
-
-      return waitForEnterHtmlFullScreen;
-    });
-
     it('can return the result of the executed script', async () => {
       await loadWebView(webview, {
         src: 'about:blank'
@@ -936,6 +981,26 @@ describe('<webview> tag', function () {
     });
   });
 
+  describe('context-menu event', () => {
+    it('emits when right-clicked in page', async () => {
+      await loadWebView(webview, { src: 'about:blank' });
+
+      const promise = waitForEvent(webview, 'context-menu');
+
+      // Simulate right-click to create context-menu event.
+      const opts = { x: 0, y: 0, button: 'right' };
+      webview.sendInputEvent({ ...opts, type: 'mouseDown' });
+      webview.sendInputEvent({ ...opts, type: 'mouseUp' });
+
+      const { params } = await promise;
+
+      expect(params.pageURL).to.equal(webview.getURL());
+      expect(params.frame).to.be.undefined();
+      expect(params.x).to.be.a('number');
+      expect(params.y).to.be.a('number');
+    });
+  });
+
   describe('media-started-playing media-paused events', () => {
     beforeEach(function () {
       if (!document.createElement('audio').canPlayType('audio/wav')) {
@@ -1004,7 +1069,10 @@ describe('<webview> tag', function () {
     });
   });
 
-  describe('<webview>.capturePage()', () => {
+  // TODO(nornagon): this seems to have become much less reliable as of
+  // https://github.com/electron/electron/pull/32419. Tracked at
+  // https://github.com/electron/electron/issues/32705.
+  describe.skip('<webview>.capturePage()', () => {
     before(function () {
       // TODO(miniak): figure out why this is failing on windows
       if (process.platform === 'win32') {
@@ -1028,14 +1096,16 @@ describe('<webview> tag', function () {
   ifdescribe(features.isPrintingEnabled())('<webview>.printToPDF()', () => {
     it('rejects on incorrectly typed parameters', async () => {
       const badTypes = {
-        marginsType: 'terrible',
-        scaleFactor: 'not-a-number',
         landscape: [],
-        pageRanges: { oops: 'im-not-the-right-key' },
-        headerFooter: '123',
-        printSelectionOnly: 1,
+        displayHeaderFooter: '123',
         printBackground: 2,
-        pageSize: 'IAmAPageSize'
+        scale: 'not-a-number',
+        pageSize: 'IAmAPageSize',
+        margins: 'terrible',
+        pageRanges: { oops: 'im-not-the-right-key' },
+        headerTemplate: [1, 2, 3],
+        footerTemplate: [4, 5, 6],
+        preferCSSPageSize: 'no'
       };
 
       // These will hard crash in Chromium unless we type-check
@@ -1081,6 +1151,14 @@ describe('<webview> tag', function () {
         module: 'undefined',
         process: 'undefined',
         global: 'undefined'
+      });
+    });
+
+    it('handler modifying params.instanceId does not break <webview>', async () => {
+      ipcRenderer.send('break-next-will-attach-webview');
+
+      await startLoadingWebViewAndWaitForMessage(webview, {
+        src: `file://${fixtures}/pages/a.html`
       });
     });
 

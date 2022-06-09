@@ -1,14 +1,13 @@
 /**
  * Create and minimally track guest windows at the direction of the renderer
  * (via window.open). Here, "guest" roughly means "child" — it's not necessarily
- * emblematic of its process status; both in-process (same-origin
- * nativeWindowOpen) and out-of-process (cross-origin nativeWindowOpen and
- * BrowserWindowProxy) are created here. "Embedder" roughly means "parent."
+ * emblematic of its process status; both in-process (same-origin) and
+ * out-of-process (cross-origin) are created here. "Embedder" roughly means
+ * "parent."
  */
 import { BrowserWindow } from 'electron/main';
 import type { BrowserWindowConstructorOptions, Referrer, WebContents, LoadURLOptions } from 'electron/main';
-import { parseFeatures } from '@electron/internal/common/parse-features-string';
-import { IPC_MESSAGES } from '@electron/internal/common/ipc-messages';
+import { parseFeatures } from '@electron/internal/browser/parse-features-string';
 
 type PostData = LoadURLOptions['postData']
 export type WindowOpenArgs = {
@@ -23,15 +22,14 @@ const unregisterFrameName = (name: string) => frameNamesToWindow.delete(name);
 const getGuestWindowByFrameName = (name: string) => frameNamesToWindow.get(name);
 
 /**
- * `openGuestWindow` is called for both implementations of window.open
- * (BrowserWindowProxy and nativeWindowOpen) to create and setup event handling
- * for the new window.
+ * `openGuestWindow` is called to create and setup event handling for the new
+ * window.
  *
  * Until its removal in 12.0.0, the `new-window` event is fired, allowing the
  * user to preventDefault() on the passed event (which ends up calling
- * DestroyWebContents in the nativeWindowOpen code path).
+ * DestroyWebContents).
  */
-export function openGuestWindow ({ event, embedder, guest, referrer, disposition, postData, overrideBrowserWindowOptions, windowOpenArgs }: {
+export function openGuestWindow ({ event, embedder, guest, referrer, disposition, postData, overrideBrowserWindowOptions, windowOpenArgs, outlivesOpener }: {
   event: { sender: WebContents, defaultPrevented: boolean },
   embedder: WebContents,
   guest?: WebContents,
@@ -40,9 +38,10 @@ export function openGuestWindow ({ event, embedder, guest, referrer, disposition
   postData?: PostData,
   overrideBrowserWindowOptions?: BrowserWindowConstructorOptions,
   windowOpenArgs: WindowOpenArgs,
+  outlivesOpener: boolean,
 }): BrowserWindow | undefined {
   const { url, frameName, features } = windowOpenArgs;
-  const { options: browserWindowOptions, additionalFeatures } = makeBrowserWindowOptions({
+  const browserWindowOptions = makeBrowserWindowOptions({
     embedder,
     features,
     overrideOptions: overrideBrowserWindowOptions
@@ -54,7 +53,6 @@ export function openGuestWindow ({ event, embedder, guest, referrer, disposition
     guest,
     browserWindowOptions,
     windowOpenArgs,
-    additionalFeatures,
     disposition,
     postData,
     referrer
@@ -66,21 +64,23 @@ export function openGuestWindow ({ event, embedder, guest, referrer, disposition
   // https://html.spec.whatwg.org/multipage/window-object.html#apis-for-creating-and-navigating-browsing-contexts-by-name
   const existingWindow = getGuestWindowByFrameName(frameName);
   if (existingWindow) {
-    existingWindow.loadURL(url);
-    return existingWindow;
+    if (existingWindow.isDestroyed() || existingWindow.webContents.isDestroyed()) {
+      // FIXME(t57ser): The webContents is destroyed for some reason, unregister the frame name
+      unregisterFrameName(frameName);
+    } else {
+      existingWindow.loadURL(url);
+      return existingWindow;
+    }
   }
 
   const window = new BrowserWindow({
     webContents: guest,
     ...browserWindowOptions
   });
+
   if (!guest) {
-    // We should only call `loadURL` if the webContents was constructed by us in
-    // the case of BrowserWindowProxy (non-sandboxed, nativeWindowOpen: false),
-    // as navigating to the url when creating the window from an existing
-    // webContents is not necessary (it will navigate there anyway).
-    // This can also happen if we enter this function from OpenURLFromTab, in
-    // which case the browser process is responsible for initiating navigation
+    // When we open a new window from a link (via OpenURLFromTab),
+    // the browser process is responsible for initiating navigation
     // in the new window.
     window.loadURL(url, {
       httpReferrer: referrer,
@@ -91,9 +91,9 @@ export function openGuestWindow ({ event, embedder, guest, referrer, disposition
     });
   }
 
-  handleWindowLifecycleEvents({ embedder, frameName, guest: window });
+  handleWindowLifecycleEvents({ embedder, frameName, guest: window, outlivesOpener });
 
-  embedder.emit('did-create-window', window, { url, frameName, options: browserWindowOptions, disposition, additionalFeatures, referrer, postData });
+  embedder.emit('did-create-window', window, { url, frameName, options: browserWindowOptions, disposition, referrer, postData });
 
   return window;
 }
@@ -104,22 +104,26 @@ export function openGuestWindow ({ event, embedder, guest, referrer, disposition
  * too is the guest destroyed; this is Electron convention and isn't based in
  * browser behavior.
  */
-const handleWindowLifecycleEvents = function ({ embedder, guest, frameName }: {
+const handleWindowLifecycleEvents = function ({ embedder, guest, frameName, outlivesOpener }: {
   embedder: WebContents,
   guest: BrowserWindow,
-  frameName: string
+  frameName: string,
+  outlivesOpener: boolean
 }) {
   const closedByEmbedder = function () {
     guest.removeListener('closed', closedByUser);
     guest.destroy();
   };
 
-  const cachedGuestId = guest.webContents.id;
   const closedByUser = function () {
-    embedder._sendInternal(`${IPC_MESSAGES.GUEST_WINDOW_MANAGER_WINDOW_CLOSED}_${cachedGuestId}`);
-    embedder.removeListener('current-render-view-deleted' as any, closedByEmbedder);
+    // Embedder might have been closed
+    if (!embedder.isDestroyed() && !outlivesOpener) {
+      embedder.removeListener('current-render-view-deleted' as any, closedByEmbedder);
+    }
   };
-  embedder.once('current-render-view-deleted' as any, closedByEmbedder);
+  if (!outlivesOpener) {
+    embedder.once('current-render-view-deleted' as any, closedByEmbedder);
+  }
   guest.once('closed', closedByUser);
 
   if (frameName) {
@@ -134,19 +138,18 @@ const handleWindowLifecycleEvents = function ({ embedder, guest, frameName }: {
  * Deprecated in favor of `webContents.setWindowOpenHandler` and
  * `did-create-window` in 11.0.0. Will be removed in 12.0.0.
  */
-function emitDeprecatedNewWindowEvent ({ event, embedder, guest, windowOpenArgs, browserWindowOptions, additionalFeatures, disposition, referrer, postData }: {
+function emitDeprecatedNewWindowEvent ({ event, embedder, guest, windowOpenArgs, browserWindowOptions, disposition, referrer, postData }: {
   event: { sender: WebContents, defaultPrevented: boolean, newGuest?: BrowserWindow },
   embedder: WebContents,
   guest?: WebContents,
   windowOpenArgs: WindowOpenArgs,
   browserWindowOptions: BrowserWindowConstructorOptions,
-  additionalFeatures: string[]
   disposition: string,
   referrer: Referrer,
   postData?: PostData,
 }): boolean {
   const { url, frameName } = windowOpenArgs;
-  const isWebViewWithPopupsDisabled = embedder.getType() === 'webview' && embedder.getLastWebPreferences().disablePopups;
+  const isWebViewWithPopupsDisabled = embedder.getType() === 'webview' && embedder.getLastWebPreferences()!.disablePopups;
   const postBody = postData ? {
     data: postData,
     ...parseContentTypeFormat(postData)
@@ -162,7 +165,7 @@ function emitDeprecatedNewWindowEvent ({ event, embedder, guest, windowOpenArgs,
       ...browserWindowOptions,
       webContents: guest
     },
-    additionalFeatures,
+    [], // additionalFeatures
     referrer,
     postBody
   );
@@ -180,7 +183,8 @@ function emitDeprecatedNewWindowEvent ({ event, embedder, guest, windowOpenArgs,
       handleWindowLifecycleEvents({
         embedder: event.sender,
         guest: newGuest,
-        frameName
+        frameName,
+        outlivesOpener: false
       });
     }
     return true;
@@ -192,7 +196,6 @@ function emitDeprecatedNewWindowEvent ({ event, embedder, guest, windowOpenArgs,
 const securityWebPreferences: { [key: string]: boolean } = {
   contextIsolation: true,
   javascript: false,
-  nativeWindowOpen: true,
   nodeIntegration: false,
   sandbox: true,
   webviewTag: false,
@@ -200,82 +203,55 @@ const securityWebPreferences: { [key: string]: boolean } = {
   enableWebSQL: false
 };
 
-function makeBrowserWindowOptions ({ embedder, features, overrideOptions, useDeprecatedBehaviorForBareValues = true, useDeprecatedBehaviorForOptionInheritance = true }: {
+function makeBrowserWindowOptions ({ embedder, features, overrideOptions }: {
   embedder: WebContents,
   features: string,
   overrideOptions?: BrowserWindowConstructorOptions,
-  useDeprecatedBehaviorForBareValues?: boolean
-  useDeprecatedBehaviorForOptionInheritance?: boolean
 }) {
-  const { options: parsedOptions, webPreferences: parsedWebPreferences, additionalFeatures } = parseFeatures(features, useDeprecatedBehaviorForBareValues);
-
-  const deprecatedInheritedOptions = getDeprecatedInheritedOptions(embedder);
+  const { options: parsedOptions, webPreferences: parsedWebPreferences } = parseFeatures(features);
 
   return {
-    additionalFeatures,
-    options: {
-      ...(useDeprecatedBehaviorForOptionInheritance && deprecatedInheritedOptions),
-      show: true,
-      width: 800,
-      height: 600,
-      ...parsedOptions,
-      ...overrideOptions,
-      webPreferences: makeWebPreferences({ embedder, insecureParsedWebPreferences: parsedWebPreferences, secureOverrideWebPreferences: overrideOptions && overrideOptions.webPreferences, useDeprecatedBehaviorForOptionInheritance: true })
-    } as Electron.BrowserViewConstructorOptions
-  };
+    show: true,
+    width: 800,
+    height: 600,
+    ...parsedOptions,
+    ...overrideOptions,
+    // Note that for normal code path an existing WebContents created by
+    // Chromium will be used, with web preferences parsed in the
+    // |-will-add-new-contents| event.
+    // The |webPreferences| here is only used by the |new-window| event.
+    webPreferences: makeWebPreferences({
+      embedder,
+      insecureParsedWebPreferences: parsedWebPreferences,
+      secureOverrideWebPreferences: overrideOptions && overrideOptions.webPreferences
+    })
+  } as Electron.BrowserViewConstructorOptions;
 }
 
-export function makeWebPreferences ({ embedder, secureOverrideWebPreferences = {}, insecureParsedWebPreferences: parsedWebPreferences = {}, useDeprecatedBehaviorForOptionInheritance = true }: {
+export function makeWebPreferences ({ embedder, secureOverrideWebPreferences = {}, insecureParsedWebPreferences: parsedWebPreferences = {} }: {
   embedder: WebContents,
   insecureParsedWebPreferences?: ReturnType<typeof parseFeatures>['webPreferences'],
   // Note that override preferences are considered elevated, and should only be
   // sourced from the main process, as they override security defaults. If you
   // have unvetted prefs, use parsedWebPreferences.
   secureOverrideWebPreferences?: BrowserWindowConstructorOptions['webPreferences'],
-  useDeprecatedBehaviorForBareValues?: boolean
-  useDeprecatedBehaviorForOptionInheritance?: boolean
 }) {
-  const deprecatedInheritedOptions = getDeprecatedInheritedOptions(embedder);
-  const parentWebPreferences = embedder.getLastWebPreferences();
+  const parentWebPreferences = embedder.getLastWebPreferences()!;
   const securityWebPreferencesFromParent = (Object.keys(securityWebPreferences).reduce((map, key) => {
     if (securityWebPreferences[key] === parentWebPreferences[key as keyof Electron.WebPreferences]) {
       (map as any)[key] = parentWebPreferences[key as keyof Electron.WebPreferences];
     }
     return map;
   }, {} as Electron.WebPreferences));
-  const openerId = parentWebPreferences.nativeWindowOpen ? null : embedder.id;
 
   return {
-    ...(useDeprecatedBehaviorForOptionInheritance && deprecatedInheritedOptions ? deprecatedInheritedOptions.webPreferences : null),
     ...parsedWebPreferences,
     // Note that order is key here, we want to disallow the renderer's
     // ability to change important security options but allow main (via
     // setWindowOpenHandler) to change them.
     ...securityWebPreferencesFromParent,
-    ...secureOverrideWebPreferences,
-    // Sets correct openerId here to give correct options to 'new-window' event handler
-    // TODO: Figure out another way to pass this?
-    openerId
+    ...secureOverrideWebPreferences
   };
-}
-
-/**
- * Current Electron behavior is to inherit all options from the parent window.
- * In practical use, this is kind of annoying because consumers have to know
- * about the parent window's preferences in order to unset them and makes child
- * windows even more of an anomaly. In 11.0.0 we will remove this behavior and
- * only critical security preferences will be inherited by default.
- */
-function getDeprecatedInheritedOptions (embedder: WebContents) {
-  if (!embedder.browserWindowOptions) {
-    // If it's a webview, return just the webPreferences.
-    return {
-      webPreferences: embedder.getLastWebPreferences()
-    };
-  }
-
-  const { type, show, ...inheritableOptions } = embedder.browserWindowOptions;
-  return inheritableOptions;
 }
 
 function formatPostDataHeaders (postData: PostData) {
@@ -291,7 +267,7 @@ const MULTIPART_CONTENT_TYPE = 'multipart/form-data';
 const URL_ENCODED_CONTENT_TYPE = 'application/x-www-form-urlencoded';
 
 // Figure out appropriate headers for post data.
-const parseContentTypeFormat = function (postData: Exclude<PostData, undefined>) {
+export const parseContentTypeFormat = function (postData: Exclude<PostData, undefined>) {
   if (postData.length) {
     if (postData[0].type === 'rawData') {
       // For multipart forms, the first element will start with the boundary

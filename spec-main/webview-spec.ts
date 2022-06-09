@@ -3,7 +3,7 @@ import * as url from 'url';
 import { BrowserWindow, session, ipcMain, app, WebContents } from 'electron/main';
 import { closeAllWindows } from './window-helpers';
 import { emittedOnce, emittedUntil } from './events-helpers';
-import { ifdescribe } from './spec-helpers';
+import { ifit, delay } from './spec-helpers';
 import { expect } from 'chai';
 
 async function loadWebView (w: WebContents, attributes: Record<string, string>, openDevTools: boolean = false): Promise<void> {
@@ -26,8 +26,7 @@ async function loadWebView (w: WebContents, attributes: Record<string, string>, 
   `);
 }
 
-// The render process of webview might receive SIGKILL because of OOM.
-ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
+describe('<webview> tag', function () {
   const fixtures = path.join(__dirname, '..', 'spec', 'fixtures');
 
   afterEach(closeAllWindows);
@@ -183,6 +182,26 @@ ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
     });
   });
 
+  describe('did-attach event', () => {
+    it('is emitted when a webview has been attached', async () => {
+      const w = new BrowserWindow({
+        webPreferences: {
+          webviewTag: true
+        }
+      });
+      await w.loadURL('about:blank');
+      const message = await w.webContents.executeJavaScript(`new Promise((resolve, reject) => {
+        const webview = new WebView()
+        webview.setAttribute('src', 'about:blank')
+        webview.addEventListener('did-attach', (e) => {
+          resolve('ok')
+        })
+        document.body.appendChild(webview)
+      })`);
+      expect(message).to.equal('ok');
+    });
+  });
+
   describe('did-change-theme-color event', () => {
     it('emits when theme color changes', async () => {
       const w = new BrowserWindow({
@@ -208,7 +227,8 @@ ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
     });
   });
 
-  it('loads devtools extensions registered on the parent window', async () => {
+  // This test is flaky on WOA, so skip it there.
+  ifit(process.platform !== 'win32' || process.arch !== 'arm64')('loads devtools extensions registered on the parent window', async () => {
     const w = new BrowserWindow({
       show: false,
       webPreferences: {
@@ -236,7 +256,7 @@ ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
           if (!webContents.isDestroyed() && webContents.devToolsWebContents) {
             webContents.devToolsWebContents.executeJavaScript('(' + function () {
               const { UI } = (window as any);
-              const tabs = UI.inspectorView._tabbedPane._tabs;
+              const tabs = UI.inspectorView.tabbedPane.tabs;
               const lastPanelId: any = tabs[tabs.length - 1].id;
               UI.inspectorView.showPanel(lastPanelId);
             }.toString() + ')()');
@@ -378,9 +398,174 @@ ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
       expect(webview.getZoomFactor()).to.equal(1.2);
       await w.loadURL(`${zoomScheme}://host1`);
     });
+
+    it('does not crash when changing zoom level after webview is destroyed', async () => {
+      const w = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          webviewTag: true,
+          nodeIntegration: true,
+          session: webviewSession,
+          contextIsolation: false
+        }
+      });
+      const attachPromise = emittedOnce(w.webContents, 'did-attach-webview');
+      await w.loadFile(path.join(fixtures, 'pages', 'webview-zoom-inherited.html'));
+      await attachPromise;
+      await w.webContents.executeJavaScript('view.remove()');
+      w.webContents.setZoomLevel(0.5);
+    });
   });
 
-  describe('nativeWindowOpen option', () => {
+  describe('requestFullscreen from webview', () => {
+    const loadWebViewWindow = async () => {
+      const w = new BrowserWindow({
+        webPreferences: {
+          webviewTag: true,
+          nodeIntegration: true,
+          contextIsolation: false
+        }
+      });
+
+      const attachPromise = emittedOnce(w.webContents, 'did-attach-webview');
+      const loadPromise = emittedOnce(w.webContents, 'did-finish-load');
+      const readyPromise = emittedOnce(ipcMain, 'webview-ready');
+
+      w.loadFile(path.join(__dirname, 'fixtures', 'webview', 'fullscreen', 'main.html'));
+
+      const [, webview] = await attachPromise;
+      await Promise.all([readyPromise, loadPromise]);
+
+      return [w, webview];
+    };
+
+    afterEach(async () => {
+      // The leaving animation is un-observable but can interfere with future tests
+      // Specifically this is async on macOS but can be on other platforms too
+      await delay(1000);
+
+      closeAllWindows();
+    });
+
+    ifit(process.platform !== 'darwin')('should make parent frame element fullscreen too (non-macOS)', async () => {
+      const [w, webview] = await loadWebViewWindow();
+      expect(await w.webContents.executeJavaScript('isIframeFullscreen()')).to.be.false();
+
+      const parentFullscreen = emittedOnce(ipcMain, 'fullscreenchange');
+      await webview.executeJavaScript('document.getElementById("div").requestFullscreen()', true);
+      await parentFullscreen;
+
+      expect(await w.webContents.executeJavaScript('isIframeFullscreen()')).to.be.true();
+
+      const close = emittedOnce(w, 'closed');
+      w.close();
+      await close;
+    });
+
+    ifit(process.platform === 'darwin')('should make parent frame element fullscreen too (macOS)', async () => {
+      const [w, webview] = await loadWebViewWindow();
+      expect(await w.webContents.executeJavaScript('isIframeFullscreen()')).to.be.false();
+
+      const parentFullscreen = emittedOnce(ipcMain, 'fullscreenchange');
+      const enterHTMLFS = emittedOnce(w.webContents, 'enter-html-full-screen');
+      const leaveHTMLFS = emittedOnce(w.webContents, 'leave-html-full-screen');
+
+      await webview.executeJavaScript('document.getElementById("div").requestFullscreen()', true);
+      expect(await w.webContents.executeJavaScript('isIframeFullscreen()')).to.be.true();
+
+      await webview.executeJavaScript('document.exitFullscreen()');
+      await Promise.all([enterHTMLFS, leaveHTMLFS, parentFullscreen]);
+
+      const close = emittedOnce(w, 'closed');
+      w.close();
+      await close;
+    });
+
+    // FIXME(zcbenz): Fullscreen events do not work on Linux.
+    ifit(process.platform !== 'linux')('exiting fullscreen should unfullscreen window', async () => {
+      const [w, webview] = await loadWebViewWindow();
+      const enterFullScreen = emittedOnce(w, 'enter-full-screen');
+      await webview.executeJavaScript('document.getElementById("div").requestFullscreen()', true);
+      await enterFullScreen;
+
+      const leaveFullScreen = emittedOnce(w, 'leave-full-screen');
+      await webview.executeJavaScript('document.exitFullscreen()', true);
+      await leaveFullScreen;
+      await delay(0);
+      expect(w.isFullScreen()).to.be.false();
+
+      const close = emittedOnce(w, 'closed');
+      w.close();
+      await close;
+    });
+
+    // Sending ESC via sendInputEvent only works on Windows.
+    ifit(process.platform === 'win32')('pressing ESC should unfullscreen window', async () => {
+      const [w, webview] = await loadWebViewWindow();
+      const enterFullScreen = emittedOnce(w, 'enter-full-screen');
+      await webview.executeJavaScript('document.getElementById("div").requestFullscreen()', true);
+      await enterFullScreen;
+
+      const leaveFullScreen = emittedOnce(w, 'leave-full-screen');
+      w.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+      await leaveFullScreen;
+      await delay(0);
+      expect(w.isFullScreen()).to.be.false();
+
+      const close = emittedOnce(w, 'closed');
+      w.close();
+      await close;
+    });
+
+    it('pressing ESC should emit the leave-html-full-screen event', async () => {
+      const w = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          webviewTag: true,
+          nodeIntegration: true,
+          contextIsolation: false
+        }
+      });
+
+      const didAttachWebview = emittedOnce(w.webContents, 'did-attach-webview');
+      w.loadFile(path.join(fixtures, 'pages', 'webview-did-attach-event.html'));
+
+      const [, webContents] = await didAttachWebview;
+
+      const enterFSWindow = emittedOnce(w, 'enter-html-full-screen');
+      const enterFSWebview = emittedOnce(webContents, 'enter-html-full-screen');
+      await webContents.executeJavaScript('document.getElementById("div").requestFullscreen()', true);
+      await enterFSWindow;
+      await enterFSWebview;
+
+      const leaveFSWindow = emittedOnce(w, 'leave-html-full-screen');
+      const leaveFSWebview = emittedOnce(webContents, 'leave-html-full-screen');
+      webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+      await leaveFSWebview;
+      await leaveFSWindow;
+
+      const close = emittedOnce(w, 'closed');
+      w.close();
+      await close;
+    });
+
+    it('should support user gesture', async () => {
+      const [w, webview] = await loadWebViewWindow();
+
+      const waitForEnterHtmlFullScreen = emittedOnce(webview, 'enter-html-full-screen');
+
+      const jsScript = "document.querySelector('video').webkitRequestFullscreen()";
+      webview.executeJavaScript(jsScript, true);
+
+      await waitForEnterHtmlFullScreen;
+
+      const close = emittedOnce(w, 'closed');
+      w.close();
+      await close;
+    });
+  });
+
+  describe('child windows', () => {
     let w: BrowserWindow;
     beforeEach(async () => {
       w = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: true, webviewTag: true, contextIsolation: false } });
@@ -393,7 +578,7 @@ ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
       loadWebView(w.webContents, {
         allowpopups: 'on',
         nodeintegration: 'on',
-        webpreferences: 'nativeWindowOpen=1,contextIsolation=no',
+        webpreferences: 'contextIsolation=no',
         src: `file://${path.join(fixtures, 'api', 'native-window-open-blank.html')}`
       });
 
@@ -406,7 +591,7 @@ ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
       loadWebView(w.webContents, {
         allowpopups: 'on',
         nodeintegration: 'on',
-        webpreferences: 'nativeWindowOpen=1,contextIsolation=no',
+        webpreferences: 'contextIsolation=no',
         src: `file://${path.join(fixtures, 'api', 'native-window-open-file.html')}`
       });
 
@@ -418,7 +603,7 @@ ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
       // Don't wait for loading to finish.
       loadWebView(w.webContents, {
         nodeintegration: 'on',
-        webpreferences: 'nativeWindowOpen=1,contextIsolation=no',
+        webpreferences: 'contextIsolation=no',
         src: `file://${path.join(fixtures, 'api', 'native-window-open-no-allowpopups.html')}`
       });
 
@@ -431,7 +616,7 @@ ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
       loadWebView(w.webContents, {
         allowpopups: 'on',
         nodeintegration: 'on',
-        webpreferences: 'nativeWindowOpen=1,contextIsolation=no',
+        webpreferences: 'contextIsolation=no',
         src: `file://${path.join(fixtures, 'api', 'native-window-open-cross-origin.html')}`
       });
 
@@ -447,7 +632,7 @@ ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
       const attributes = {
         allowpopups: 'on',
         nodeintegration: 'on',
-        webpreferences: 'nativeWindowOpen=1,contextIsolation=no',
+        webpreferences: 'contextIsolation=no',
         src: `file://${fixtures}/pages/window-open.html`
       };
       const { url, frameName } = await w.webContents.executeJavaScript(`
@@ -471,7 +656,7 @@ ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
       // Don't wait for loading to finish.
       loadWebView(w.webContents, {
         allowpopups: 'on',
-        webpreferences: 'nativeWindowOpen=1,contextIsolation=no',
+        webpreferences: 'contextIsolation=no',
         src: `file://${fixtures}/pages/window-open.html`
       });
 
@@ -484,11 +669,19 @@ ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
 
       loadWebView(w.webContents, {
         allowpopups: 'on',
-        webpreferences: 'nativeWindowOpen=1,contextIsolation=no',
+        webpreferences: 'contextIsolation=no',
         src: `file://${fixtures}/pages/window-open.html`
       });
 
       await webContentsCreated;
+    });
+
+    it('does not crash when creating window with noopener', async () => {
+      loadWebView(w.webContents, {
+        allowpopups: 'on',
+        src: `file://${path.join(fixtures, 'api', 'native-window-open-noopener.html')}`
+      });
+      await emittedOnce(app, 'browser-window-created');
     });
   });
 
@@ -673,6 +866,28 @@ ifdescribe(!process.env.IS_ASAN)('<webview> tag', function () {
         document.body.appendChild(webview)
       })`);
       expect(message).to.equal('hi');
+    });
+
+    it('emits focus event when contextIsolation is enabled', async () => {
+      const w = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          webviewTag: true,
+          contextIsolation: true
+        }
+      });
+      await w.loadURL('about:blank');
+      await w.webContents.executeJavaScript(`new Promise((resolve, reject) => {
+        const webview = new WebView()
+        webview.setAttribute('src', 'about:blank')
+        webview.addEventListener('dom-ready', () => {
+          webview.focus()
+        })
+        webview.addEventListener('focus', () => {
+          resolve();
+        })
+        document.body.appendChild(webview)
+      })`);
     });
   });
 });

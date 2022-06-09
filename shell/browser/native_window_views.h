@@ -2,23 +2,31 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_NATIVE_WINDOW_VIEWS_H_
-#define SHELL_BROWSER_NATIVE_WINDOW_VIEWS_H_
+#ifndef ELECTRON_SHELL_BROWSER_NATIVE_WINDOW_VIEWS_H_
+#define ELECTRON_SHELL_BROWSER_NATIVE_WINDOW_VIEWS_H_
 
 #include "shell/browser/native_window.h"
 
 #include <memory>
 #include <set>
 #include <string>
-#include <tuple>
 #include <vector>
 
 #include "shell/common/api/api.mojom.h"
+#include "third_party/skia/include/core/SkRegion.h"
 #include "ui/views/widget/widget_observer.h"
 
-#if defined(OS_WIN)
+#if defined(USE_OZONE)
+#include "ui/ozone/buildflags.h"
+#if BUILDFLAG(OZONE_PLATFORM_X11)
+#define USE_OZONE_PLATFORM_X11
+#endif
+#endif
+
+#if BUILDFLAG(IS_WIN)
 #include "base/win/scoped_gdi_object.h"
 #include "shell/browser/ui/win/taskbar_host.h"
+
 #endif
 
 namespace views {
@@ -31,8 +39,12 @@ class GlobalMenuBarX11;
 class RootView;
 class WindowStateWatcher;
 
-#if defined(USE_X11)
+#if defined(USE_OZONE_PLATFORM_X11)
 class EventDisabler;
+#endif
+
+#if BUILDFLAG(IS_WIN)
+gfx::Rect ScreenToDIPRect(HWND hwnd, const gfx::Rect& pixel_bounds);
 #endif
 
 class NativeWindowViews : public NativeWindow,
@@ -112,6 +124,7 @@ class NativeWindowViews : public NativeWindow,
   void SetIgnoreMouseEvents(bool ignore, bool forward) override;
   void SetContentProtection(bool enable) override;
   void SetFocusable(bool focusable) override;
+  bool IsFocusable() override;
   void SetMenu(ElectronMenuModel* menu_model) override;
   void AddBrowserView(NativeBrowserView* browser_view) override;
   void RemoveBrowserView(NativeBrowserView* browser_view) override;
@@ -148,7 +161,7 @@ class NativeWindowViews : public NativeWindow,
   void IncrementChildModals();
   void DecrementChildModals();
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Catch-all message handling and filtering. Called before
   // HWNDMessageHandler's built-in handling, which may pre-empt some
   // expectations in Views/Aura if messages are consumed. Returns true if the
@@ -160,14 +173,29 @@ class NativeWindowViews : public NativeWindow,
                     LPARAM l_param,
                     LRESULT* result);
   void SetIcon(HICON small_icon, HICON app_icon);
-#elif defined(OS_LINUX)
+#elif BUILDFLAG(IS_LINUX)
   void SetIcon(const gfx::ImageSkia& icon);
 #endif
 
   SkRegion* draggable_region() const { return draggable_region_.get(); }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   TaskbarHost& taskbar_host() { return taskbar_host_; }
+#endif
+
+#if BUILDFLAG(IS_WIN)
+  bool IsWindowControlsOverlayEnabled() const {
+    return (title_bar_style_ == NativeWindowViews::TitleBarStyle::kHidden) &&
+           titlebar_overlay_;
+  }
+  SkColor overlay_button_color() const { return overlay_button_color_; }
+  void set_overlay_button_color(SkColor color) {
+    overlay_button_color_ = color;
+  }
+  SkColor overlay_symbol_color() const { return overlay_symbol_color_; }
+  void set_overlay_symbol_color(SkColor color) {
+    overlay_symbol_color_ = color;
+  }
 #endif
 
  private:
@@ -179,9 +207,7 @@ class NativeWindowViews : public NativeWindow,
   void OnWidgetDestroyed(views::Widget* widget) override;
 
   // views::WidgetDelegate:
-  void DeleteDelegate() override;
   views::View* GetInitiallyFocusedView() override;
-  bool CanResize() const override;
   bool CanMaximize() const override;
   bool CanMinimize() const override;
   std::u16string GetWindowTitle() const override;
@@ -193,11 +219,11 @@ class NativeWindowViews : public NativeWindow,
   std::unique_ptr<views::NonClientFrameView> CreateNonClientFrameView(
       views::Widget* widget) override;
   void OnWidgetMove() override;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   bool ExecuteWindowsCommand(int command_id) override;
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   void HandleSizeEvent(WPARAM w_param, LPARAM l_param);
   void SetForwardMouseMessages(bool forward);
   static LRESULT CALLBACK SubclassProc(HWND hwnd,
@@ -220,10 +246,8 @@ class NativeWindowViews : public NativeWindow,
       content::WebContents*,
       const content::NativeWebKeyboardEvent& event) override;
 
-#if defined(OS_LINUX)
   // ui::EventHandler:
   void OnMouseEvent(ui::MouseEvent* event) override;
-#endif
 
   // Returns the restore state for the window.
   ui::WindowShowState GetRestoredState();
@@ -242,17 +266,17 @@ class NativeWindowViews : public NativeWindow,
   // events from resizing the window.
   extensions::SizeConstraints old_size_constraints_;
 
-#if defined(USE_X11)
+#if defined(USE_OZONE)
   std::unique_ptr<GlobalMenuBarX11> global_menu_bar_;
 
-  // Handles window state events.
-  std::unique_ptr<WindowStateWatcher> window_state_watcher_;
+#endif
 
+#if defined(USE_OZONE_PLATFORM_X11)
   // To disable the mouse events.
   std::unique_ptr<EventDisabler> event_disabler_;
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 
   ui::WindowShowState last_window_state_;
 
@@ -292,6 +316,13 @@ class NativeWindowViews : public NativeWindow,
 
   // Whether the window is currently being moved.
   bool is_moving_ = false;
+
+  absl::optional<gfx::Rect> pending_bounds_change_;
+
+  // The color to use as the theme and symbol colors respectively for Window
+  // Controls Overlay if enabled on Windows.
+  SkColor overlay_button_color_;
+  SkColor overlay_symbol_color_;
 #endif
 
   // Handles unhandled keyboard messages coming back from the renderer process.
@@ -317,10 +348,8 @@ class NativeWindowViews : public NativeWindow,
   gfx::Size widget_size_;
   double opacity_ = 1.0;
   bool widget_destroyed_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(NativeWindowViews);
 };
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_NATIVE_WINDOW_VIEWS_H_
+#endif  // ELECTRON_SHELL_BROWSER_NATIVE_WINDOW_VIEWS_H_

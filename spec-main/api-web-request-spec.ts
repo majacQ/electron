@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as url from 'url';
 import * as WebSocket from 'ws';
 import { ipcMain, protocol, session, WebContents, webContents } from 'electron/main';
-import { AddressInfo } from 'net';
+import { AddressInfo, Socket } from 'net';
 import { emittedOnce } from './events-helpers';
 
 const fixturesPath = path.resolve(__dirname, 'fixtures');
@@ -18,7 +18,7 @@ describe('webRequest module', () => {
       res.setHeader('Location', 'http://' + req.rawHeaders[1]);
       res.end();
     } else if (req.url === '/contentDisposition') {
-      res.setHeader('content-disposition', [' attachement; filename=aa%E4%B8%ADaa.txt']);
+      res.setHeader('content-disposition', [' attachment; filename=aa%E4%B8%ADaa.txt']);
       const content = req.url;
       res.end(content);
     } else {
@@ -36,7 +36,7 @@ describe('webRequest module', () => {
   let defaultURL: string;
 
   before((done) => {
-    protocol.registerStringProtocol('neworigin', (req, cb) => cb(''));
+    protocol.registerStringProtocol('cors', (req, cb) => cb(''));
     server.listen(0, '127.0.0.1', () => {
       const port = (server.address() as AddressInfo).port;
       defaultURL = `http://127.0.0.1:${port}/`;
@@ -46,14 +46,14 @@ describe('webRequest module', () => {
 
   after(() => {
     server.close();
-    protocol.unregisterProtocol('neworigin');
+    protocol.unregisterProtocol('cors');
   });
 
   let contents: WebContents = null as unknown as WebContents;
   // NB. sandbox: true is used because it makes navigations much (~8x) faster.
   before(async () => {
     contents = (webContents as any).create({ sandbox: true });
-    await contents.loadFile(path.join(fixturesPath, 'pages', 'jquery.html'));
+    await contents.loadFile(path.join(fixturesPath, 'pages', 'fetch.html'));
   });
   after(() => (contents as any).destroy());
 
@@ -72,7 +72,7 @@ describe('webRequest module', () => {
           cancel: true
         });
       });
-      await expect(ajax(defaultURL)).to.eventually.be.rejectedWith('404');
+      await expect(ajax(defaultURL)).to.eventually.be.rejected();
     });
 
     it('can filter URLs', async () => {
@@ -82,7 +82,7 @@ describe('webRequest module', () => {
       });
       const { data } = await ajax(`${defaultURL}nofilter/test`);
       expect(data).to.equal('/nofilter/test');
-      await expect(ajax(`${defaultURL}filter/test`)).to.eventually.be.rejectedWith('404');
+      await expect(ajax(`${defaultURL}filter/test`)).to.eventually.be.rejected();
     });
 
     it('receives details object', async () => {
@@ -117,9 +117,9 @@ describe('webRequest module', () => {
         callback({ cancel: true });
       });
       await expect(ajax(defaultURL, {
-        type: 'POST',
-        data: postData
-      })).to.eventually.be.rejectedWith('404');
+        method: 'POST',
+        body: qs.stringify(postData)
+      })).to.eventually.be.rejected();
     });
 
     it('can redirect the request', async () => {
@@ -151,7 +151,7 @@ describe('webRequest module', () => {
         protocol: 'file',
         slashes: true
       });
-      await expect(ajax(fileURL)).to.eventually.be.rejectedWith('404');
+      await expect(ajax(fileURL)).to.eventually.be.rejected();
     });
   });
 
@@ -181,6 +181,42 @@ describe('webRequest module', () => {
       expect(data).to.equal('/header/received');
     });
 
+    it('can change the request headers on a custom protocol redirect', async () => {
+      protocol.registerStringProtocol('no-cors', (req, callback) => {
+        if (req.url === 'no-cors://fake-host/redirect') {
+          callback({
+            statusCode: 302,
+            headers: {
+              Location: 'no-cors://fake-host'
+            }
+          });
+        } else {
+          let content = '';
+          if (req.headers.Accept === '*/*;test/header') {
+            content = 'header-received';
+          }
+          callback(content);
+        }
+      });
+
+      // Note that we need to do navigation every time after a protocol is
+      // registered or unregistered, otherwise the new protocol won't be
+      // recognized by current page when NetworkService is used.
+      await contents.loadFile(path.join(__dirname, 'fixtures', 'pages', 'fetch.html'));
+
+      try {
+        ses.webRequest.onBeforeSendHeaders((details, callback) => {
+          const requestHeaders = details.requestHeaders;
+          requestHeaders.Accept = '*/*;test/header';
+          callback({ requestHeaders: requestHeaders });
+        });
+        const { data } = await ajax('no-cors://fake-host/redirect');
+        expect(data).to.equal('header-received');
+      } finally {
+        protocol.unregisterProtocol('no-cors');
+      }
+    });
+
     it('can change request origin', async () => {
       ses.webRequest.onBeforeSendHeaders((details, callback) => {
         const requestHeaders = details.requestHeaders;
@@ -197,7 +233,7 @@ describe('webRequest module', () => {
         called = true;
         callback({ requestHeaders: details.requestHeaders });
       });
-      await ajax('neworigin://host');
+      await ajax('cors://host');
       expect(called).to.be.true();
     });
 
@@ -210,6 +246,18 @@ describe('webRequest module', () => {
       });
       ses.webRequest.onSendHeaders((details) => {
         expect(details.requestHeaders).to.deep.equal(requestHeaders);
+      });
+      await ajax(defaultURL);
+    });
+
+    it('leaves headers unchanged when no requestHeaders in callback', async () => {
+      let originalRequestHeaders: Record<string, string>;
+      ses.webRequest.onBeforeSendHeaders((details, callback) => {
+        originalRequestHeaders = details.requestHeaders;
+        callback({});
+      });
+      ses.webRequest.onSendHeaders((details) => {
+        expect(details.requestHeaders).to.deep.equal(originalRequestHeaders);
       });
       await ajax(defaultURL);
     });
@@ -272,7 +320,7 @@ describe('webRequest module', () => {
         callback({ responseHeaders: responseHeaders });
       });
       const { headers } = await ajax(defaultURL);
-      expect(headers).to.match(/^custom: Changed$/m);
+      expect(headers).to.to.have.property('custom', 'Changed');
     });
 
     it('can change response origin', async () => {
@@ -282,7 +330,7 @@ describe('webRequest module', () => {
         callback({ responseHeaders: responseHeaders });
       });
       const { headers } = await ajax(defaultURL);
-      expect(headers).to.match(/^access-control-allow-origin: http:\/\/new-origin$/m);
+      expect(headers).to.to.have.property('access-control-allow-origin', 'http://new-origin');
     });
 
     it('can change headers of CORS responses', async () => {
@@ -291,8 +339,8 @@ describe('webRequest module', () => {
         responseHeaders.Custom = ['Changed'] as any;
         callback({ responseHeaders: responseHeaders });
       });
-      const { headers } = await ajax('neworigin://host');
-      expect(headers).to.match(/^custom: Changed$/m);
+      const { headers } = await ajax('cors://host');
+      expect(headers).to.to.have.property('custom', 'Changed');
     });
 
     it('does not change header by default', async () => {
@@ -300,17 +348,17 @@ describe('webRequest module', () => {
         callback({});
       });
       const { data, headers } = await ajax(defaultURL);
-      expect(headers).to.match(/^custom: Header$/m);
+      expect(headers).to.to.have.property('custom', 'Header');
       expect(data).to.equal('/');
     });
 
     it('does not change content-disposition header by default', async () => {
       ses.webRequest.onHeadersReceived((details, callback) => {
-        expect(details.responseHeaders!['content-disposition']).to.deep.equal([' attachement; filename=aa中aa.txt']);
+        expect(details.responseHeaders!['content-disposition']).to.deep.equal([' attachment; filename="aa中aa.txt"']);
         callback({});
       });
       const { data, headers } = await ajax(defaultURL + 'contentDisposition');
-      expect(headers).to.match(/^content-disposition: attachement; filename=aa%E4%B8%ADaa.txt$/m);
+      expect(headers).to.to.have.property('content-disposition', 'attachment; filename=aa%E4%B8%ADaa.txt');
       expect(data).to.equal('/contentDisposition');
     });
 
@@ -320,7 +368,7 @@ describe('webRequest module', () => {
         callback({ responseHeaders: responseHeaders });
       });
       const { headers } = await ajax(defaultURL + 'serverRedirect');
-      expect(headers).to.match(/^custom: Header$/m);
+      expect(headers).to.to.have.property('custom', 'Header');
     });
 
     it('can change the header status', async () => {
@@ -331,19 +379,8 @@ describe('webRequest module', () => {
           statusLine: 'HTTP/1.1 404 Not Found'
         });
       });
-      const { headers } = await contents.executeJavaScript(`new Promise((resolve, reject) => {
-        const options = {
-          ...${JSON.stringify({ url: defaultURL })},
-          success: (data, status, request) => {
-            reject(new Error('expected failure'))
-          },
-          error: (xhr) => {
-            resolve({ headers: xhr.getAllResponseHeaders() })
-          }
-        }
-        $.ajax(options)
-      })`);
-      expect(headers).to.match(/^custom: Header$/m);
+      const { headers } = await ajax(defaultURL);
+      expect(headers).to.to.have.property('custom', 'Header');
     });
   });
 
@@ -360,7 +397,7 @@ describe('webRequest module', () => {
         expect(details.responseHeaders!.Custom).to.deep.equal(['Header']);
       });
       const { data, headers } = await ajax(defaultURL);
-      expect(headers).to.match(/^custom: Header$/m);
+      expect(headers).to.to.have.property('custom', 'Header');
       expect(data).to.equal('/');
     });
   });
@@ -420,7 +457,7 @@ describe('webRequest module', () => {
       ses.webRequest.onErrorOccurred((details) => {
         expect(details.error).to.equal('net::ERR_BLOCKED_BY_CLIENT');
       });
-      await expect(ajax(defaultURL)).to.eventually.be.rejectedWith('404');
+      await expect(ajax(defaultURL)).to.eventually.be.rejected();
     });
   });
 
@@ -444,8 +481,8 @@ describe('webRequest module', () => {
       server.on('upgrade', function upgrade (request, socket, head) {
         const pathname = require('url').parse(request.url).pathname;
         if (pathname === '/websocket') {
-          reqHeaders[request.url] = request.headers;
-          wss.handleUpgrade(request, socket, head, function done (ws) {
+          reqHeaders[request.url!] = request.headers;
+          wss.handleUpgrade(request, socket as Socket, head, function done (ws) {
             wss.emit('connection', ws, request);
           });
         }

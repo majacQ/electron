@@ -14,9 +14,13 @@
 #include "base/strings/string_split.h"
 #include "components/crash/core/common/crash_key.h"
 #include "content/public/common/content_switches.h"
+#include "electron/buildflags/buildflags.h"
 #include "electron/fuses.h"
+#include "shell/browser/javascript_environment.h"
 #include "shell/common/electron_constants.h"
+#include "shell/common/node_includes.h"
 #include "shell/common/options_switches.h"
+#include "shell/common/process_util.h"
 #include "third_party/crashpad/crashpad/client/annotation.h"
 
 namespace electron {
@@ -25,7 +29,7 @@ namespace crash_keys {
 
 namespace {
 
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
 // Breakpad has a flawed system of calculating the number of chunks
 // we add 127 bytes to force an extra chunk
 constexpr size_t kMaxCrashKeyValueSize = 20479;
@@ -51,7 +55,7 @@ std::deque<std::string>& GetExtraCrashKeyNames() {
 }  // namespace
 
 constexpr uint32_t kMaxCrashKeyNameLength = 40;
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
 static_assert(kMaxCrashKeyNameLength <=
                   crash_reporter::internal::kCrashKeyStorageKeySize,
               "max crash key name length above what breakpad supports");
@@ -63,9 +67,17 @@ static_assert(kMaxCrashKeyNameLength <= crashpad::Annotation::kNameMaxLength,
 void SetCrashKey(const std::string& key, const std::string& value) {
   // Chrome DCHECK()s if we try to set an annotation with a name longer than
   // the max.
-  // TODO(nornagon): warn the developer (via console.warn) when this happens.
-  if (key.size() >= kMaxCrashKeyNameLength)
+  if (key.size() >= kMaxCrashKeyNameLength) {
+    node::Environment* env =
+        node::Environment::GetCurrent(JavascriptEnvironment::GetIsolate());
+    EmitWarning(env,
+                "The crash key name, \"" + key + "\", is longer than " +
+                    std::to_string(kMaxCrashKeyNameLength) +
+                    " bytes, ignoring it.",
+                "electron");
     return;
+  }
+
   auto& crash_key_names = GetExtraCrashKeyNames();
 
   auto iter = std::find(crash_key_names.begin(), crash_key_names.end(), key);
@@ -112,7 +124,7 @@ bool IsRunningAsNode() {
 }  // namespace
 
 void SetCrashKeysFromCommandLine(const base::CommandLine& command_line) {
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
   if (command_line.HasSwitch(switches::kGlobalCrashKeys)) {
     std::vector<std::pair<std::string, std::string>> global_crash_keys;
     base::SplitStringIntoKeyValuePairs(
@@ -144,11 +156,11 @@ void SetPlatformCrashKey() {
   // TODO(nornagon): this is redundant with the 'plat' key that
   // //components/crash already includes. Remove it.
   static crash_reporter::CrashKeyString<8> platform_key("platform");
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   platform_key.Set("win32");
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_MAC)
   platform_key.Set("darwin");
-#elif defined(OS_LINUX)
+#elif BUILDFLAG(IS_LINUX)
   platform_key.Set("linux");
 #else
   platform_key.Set("unknown");

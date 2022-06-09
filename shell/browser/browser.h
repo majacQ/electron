@@ -2,15 +2,14 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_BROWSER_H_
-#define SHELL_BROWSER_BROWSER_H_
+#ifndef ELECTRON_SHELL_BROWSER_BROWSER_H_
+#define ELECTRON_SHELL_BROWSER_BROWSER_H_
 
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/observer_list.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/values.h"
@@ -19,22 +18,18 @@
 #include "shell/browser/window_list_observer.h"
 #include "shell/common/gin_helper/promise.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include <windows.h>
 #include "base/files/file_path.h"
 #include "shell/browser/ui/win/taskbar_host.h"
 #endif
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 #include "ui/base/cocoa/secure_password_input.h"
 #endif
 
 namespace base {
 class FilePath;
-}
-
-namespace gfx {
-class Image;
 }
 
 namespace gin_helper {
@@ -50,6 +45,10 @@ class Browser : public WindowListObserver {
  public:
   Browser();
   ~Browser() override;
+
+  // disable copy
+  Browser(const Browser&) = delete;
+  Browser& operator=(const Browser&) = delete;
 
   static Browser* Get();
 
@@ -83,8 +82,10 @@ class Browser : public WindowListObserver {
   // Clear the recent documents list.
   void ClearRecentDocuments();
 
+#if BUILDFLAG(IS_WIN)
   // Set the application user model ID.
   void SetAppUserModelID(const std::wstring& name);
+#endif
 
   // Remove the default protocol handler registry key
   bool RemoveAsDefaultProtocolClient(const std::string& protocol,
@@ -100,17 +101,17 @@ class Browser : public WindowListObserver {
 
   std::u16string GetApplicationNameForProtocol(const GURL& url);
 
-#if !defined(OS_LINUX)
+#if !BUILDFLAG(IS_LINUX)
   // get the name, icon and path for an application
   v8::Local<v8::Promise> GetApplicationInfoForProtocol(v8::Isolate* isolate,
                                                        const GURL& url);
 #endif
 
   // Set/Get the badge count.
-  bool SetBadgeCount(base::Optional<int> count);
+  bool SetBadgeCount(absl::optional<int> count);
   int GetBadgeCount();
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   struct LaunchItem {
     std::wstring name;
     std::wstring path;
@@ -134,7 +135,7 @@ class Browser : public WindowListObserver {
     std::u16string path;
     std::vector<std::u16string> args;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     // used in browser::setLoginItemSettings
     bool enabled = true;
     std::wstring name;
@@ -151,12 +152,13 @@ class Browser : public WindowListObserver {
   void SetLoginItemSettings(LoginItemSettings settings);
   LoginItemSettings GetLoginItemSettings(const LoginItemSettings& options);
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // Set the handler which decides whether to shutdown.
-  void SetShutdownHandler(base::Callback<bool()> handler);
+  void SetShutdownHandler(base::RepeatingCallback<bool()> handler);
 
   // Hide the application.
   void Hide();
+  bool IsHidden();
 
   // Show the application.
   void Show();
@@ -189,7 +191,8 @@ class Browser : public WindowListObserver {
 
   // Resumes an activity via hand-off.
   bool ContinueUserActivity(const std::string& type,
-                            base::DictionaryValue user_info);
+                            base::DictionaryValue user_info,
+                            base::DictionaryValue details);
 
   // Indicates that an activity was continued on another device.
   void UserActivityWasContinued(const std::string& type,
@@ -225,16 +228,16 @@ class Browser : public WindowListObserver {
   // Set docks' icon.
   void DockSetIcon(v8::Isolate* isolate, v8::Local<v8::Value> icon);
 
-#endif  // defined(OS_MAC)
+#endif  // BUILDFLAG(IS_MAC)
 
   void ShowAboutPanel();
   void SetAboutPanelOptions(base::DictionaryValue options);
 
-#if defined(OS_MAC) || defined(OS_WIN)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   void ShowEmojiPanel();
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   struct UserTask {
     base::FilePath program;
     std::wstring arguments;
@@ -256,12 +259,12 @@ class Browser : public WindowListObserver {
   // one from app's name.
   // The returned string managed by Browser, and should not be modified.
   PCWSTR GetAppUserModelID();
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
   // Whether Unity launcher is running.
   bool IsUnityRunning();
-#endif  // defined(OS_LINUX)
+#endif  // BUILDFLAG(IS_LINUX)
 
   // Tell the application to open a file.
   bool OpenFile(const std::string& file_path);
@@ -269,13 +272,13 @@ class Browser : public WindowListObserver {
   // Tell the application to open a url.
   void OpenURL(const std::string& url);
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // Tell the application to create a new window for a tab.
   void NewWindowForTab();
 
   // Tell the application that application did become active
   void DidBecomeActive();
-#endif  // defined(OS_MAC)
+#endif  // BUILDFLAG(IS_MAC)
 
   // Tell the application that application is activated with visible/invisible
   // windows.
@@ -300,14 +303,14 @@ class Browser : public WindowListObserver {
 
   void RemoveObserver(BrowserObserver* obs) { observers_.RemoveObserver(obs); }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // Returns whether secure input is enabled
   bool IsSecureKeyboardEntryEnabled();
   void SetSecureKeyboardEntryEnabled(bool enabled);
 #endif
 
   bool is_shutting_down() const { return is_shutdown_; }
-  bool is_quiting() const { return is_quiting_; }
+  bool is_quitting() const { return is_quitting_; }
   bool is_ready() const { return is_ready_; }
   v8::Local<v8::Value> WhenReady(v8::Isolate* isolate);
 
@@ -324,7 +327,7 @@ class Browser : public WindowListObserver {
   // Send the before-quit message and start closing windows.
   bool HandleBeforeQuit();
 
-  bool is_quiting_ = false;
+  bool is_quitting_ = false;
 
  private:
   // WindowListObserver implementations:
@@ -353,29 +356,27 @@ class Browser : public WindowListObserver {
 
   std::unique_ptr<gin_helper::Promise<void>> ready_promise_;
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   std::unique_ptr<ui::ScopedPasswordInputEnabler> password_input_enabler_;
   base::Time last_dock_show_;
 #endif
 
-#if defined(OS_LINUX) || defined(OS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   base::Value about_panel_options_;
-#elif defined(OS_MAC)
+#elif BUILDFLAG(IS_MAC)
   base::DictionaryValue about_panel_options_;
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   void UpdateBadgeContents(HWND hwnd,
-                           const base::Optional<std::string>& badge_content,
+                           const absl::optional<std::string>& badge_content,
                            const std::string& badge_alt_string);
 
   // In charge of running taskbar related APIs.
   TaskbarHost taskbar_host_;
 #endif
-
-  DISALLOW_COPY_AND_ASSIGN(Browser);
 };
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_BROWSER_H_
+#endif  // ELECTRON_SHELL_BROWSER_BROWSER_H_

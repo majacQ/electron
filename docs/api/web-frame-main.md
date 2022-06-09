@@ -16,7 +16,7 @@ win.loadURL('https://twitter.com')
 
 win.webContents.on(
   'did-frame-navigate',
-  (event, url, isMainFrame, frameProcessId, frameRoutingId) => {
+  (event, url, httpResponseCode, httpStatusText, isMainFrame, frameProcessId, frameRoutingId) => {
     const frame = webFrameMain.fromId(frameProcessId, frameRoutingId)
     if (frame) {
       const code = 'document.body.innerHTML = document.body.innerHTML.replaceAll("heck", "h*ck")'
@@ -68,14 +68,21 @@ or `undefined` if there is no WebFrameMain associated with the given IDs.
 
 ## Class: WebFrameMain
 
-Process: [Main](../glossary.md#main-process)
+Process: [Main](../glossary.md#main-process)<br />
+_This class is not exported from the `'electron'` module. It is only available as a return value of other methods in the Electron API._
+
+### Instance Events
+
+#### Event: 'dom-ready'
+
+Emitted when the document is loaded.
 
 ### Instance Methods
 
 #### `frame.executeJavaScript(code[, userGesture])`
 
-* `code` String
-* `userGesture` Boolean (optional) - Default is `false`.
+* `code` string
+* `userGesture` boolean (optional) - Default is `false`.
 
 Returns `Promise<unknown>` - A promise that resolves with the result of the executed
 code or is rejected if execution throws or results in a rejected promise.
@@ -92,7 +99,7 @@ Returns `boolean` - Whether the reload was initiated successfully. Only results 
 
 #### `frame.send(channel, ...args)`
 
-* `channel` String
+* `channel` string
 * `...args` any[]
 
 Send an asynchronous message to the renderer process via `channel`, along with
@@ -106,7 +113,7 @@ The renderer process can handle the message by listening to `channel` with the
 
 #### `frame.postMessage(channel, message, [transfer])`
 
-* `channel` String
+* `channel` string
 * `message` any
 * `transfer` MessagePortMain[] (optional)
 
@@ -166,7 +173,7 @@ not used again.
 
 #### `frame.name` _Readonly_
 
-A `String` representing the frame name.
+A `string` representing the frame name.
 
 #### `frame.osProcessId` _Readonly_
 
@@ -182,3 +189,12 @@ This is not the same as the OS process ID; to read that use `frame.osProcessId`.
 An `Integer` representing the unique frame id in the current renderer process.
 Distinct `WebFrameMain` instances that refer to the same underlying frame will
 have the same `routingId`.
+
+#### `frame.visibilityState` _Readonly_
+
+A `string` representing the [visibility state](https://developer.mozilla.org/en-US/docs/Web/API/Document/visibilityState) of the frame.
+
+See also how the [Page Visibility API](browser-window.md#page-visibility) is affected by other Electron APIs.
+
+[SCA]: https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Structured_clone_algorithm
+[`postMessage`]: https://developer.mozilla.org/en-US/docs/Web/API/Window/postMessage

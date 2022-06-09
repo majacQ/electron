@@ -41,11 +41,11 @@ struct Converter<device::mojom::SerialPortInfoPtr> {
     if (port->serial_number && !port->serial_number->empty()) {
       dict.Set("serialNumber", *port->serial_number);
     }
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
     if (port->usb_driver_name && !port->usb_driver_name->empty()) {
       dict.Set("usbDriverName", *port->usb_driver_name);
     }
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
     if (!port->device_instance_id.empty()) {
       dict.Set("deviceInstanceId", port->device_instance_id);
     }
@@ -67,9 +67,9 @@ SerialChooserController::SerialChooserController(
     : WebContentsObserver(web_contents),
       filters_(std::move(filters)),
       callback_(std::move(callback)),
-      serial_delegate_(serial_delegate) {
-  requesting_origin_ = render_frame_host->GetLastCommittedOrigin();
-  embedding_origin_ = web_contents->GetMainFrame()->GetLastCommittedOrigin();
+      serial_delegate_(serial_delegate),
+      render_frame_host_id_(render_frame_host->GetGlobalId()) {
+  origin_ = web_contents->GetMainFrame()->GetLastCommittedOrigin();
 
   chooser_context_ = SerialChooserContextFactory::GetForBrowserContext(
                          web_contents->GetBrowserContext())
@@ -116,6 +116,10 @@ void SerialChooserController::OnPortRemoved(
   }
 }
 
+void SerialChooserController::OnPortManagerConnectionError() {
+  // TODO(nornagon/jkleinsc): report event
+}
+
 void SerialChooserController::OnDeviceChosen(const std::string& port_id) {
   if (port_id.empty()) {
     RunCallback(/*port=*/nullptr);
@@ -124,9 +128,13 @@ void SerialChooserController::OnDeviceChosen(const std::string& port_id) {
         std::find_if(ports_.begin(), ports_.end(), [&port_id](const auto& ptr) {
           return ptr->token.ToString() == port_id;
         });
-    chooser_context_->GrantPortPermission(requesting_origin_, embedding_origin_,
-                                          *it->get());
-    RunCallback(it->Clone());
+    if (it != ports_.end()) {
+      auto* rfh = content::RenderFrameHost::FromID(render_frame_host_id_);
+      chooser_context_->GrantPortPermission(origin_, *it->get(), rfh);
+      RunCallback(it->Clone());
+    } else {
+      RunCallback(/*port=*/nullptr);
+    }
   }
 }
 

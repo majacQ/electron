@@ -1,10 +1,10 @@
-import { app, ipcMain, session, deprecate, webFrameMain } from 'electron/main';
+import { app, ipcMain, session, webFrameMain, deprecate } from 'electron/main';
 import type { BrowserWindowConstructorOptions, LoadURLOptions } from 'electron/main';
 
 import * as url from 'url';
 import * as path from 'path';
-import { openGuestWindow, makeWebPreferences } from '@electron/internal/browser/guest-window-manager';
-import { NavigationController } from '@electron/internal/browser/navigation-controller';
+import { openGuestWindow, makeWebPreferences, parseContentTypeFormat } from '@electron/internal/browser/guest-window-manager';
+import { parseFeatures } from '@electron/internal/browser/parse-features-string';
 import { ipcMainInternal } from '@electron/internal/browser/ipc-main-internal';
 import * as ipcMainUtils from '@electron/internal/browser/ipc-main-internal-utils';
 import { MessagePortMain } from '@electron/internal/browser/message-port-main';
@@ -61,7 +61,21 @@ const PDFPageSizes: Record<string, ElectronInternal.MediaSize> = {
     width_microns: 279400,
     custom_display_name: 'Tabloid'
   }
-};
+} as const;
+
+const paperFormats: Record<string, ElectronInternal.PageSize> = {
+  letter: { width: 8.5, height: 11 },
+  legal: { width: 8.5, height: 14 },
+  tabloid: { width: 11, height: 17 },
+  ledger: { width: 17, height: 11 },
+  a0: { width: 33.1, height: 46.8 },
+  a1: { width: 23.4, height: 33.1 },
+  a2: { width: 16.54, height: 23.4 },
+  a3: { width: 11.7, height: 16.54 },
+  a4: { width: 8.27, height: 11.7 },
+  a5: { width: 5.83, height: 8.27 },
+  a6: { width: 4.13, height: 5.83 }
+} as const;
 
 // The minimum micron size Chromium accepts is that where:
 // Per printing/units.h:
@@ -74,42 +88,6 @@ const PDFPageSizes: Record<string, ElectronInternal.MediaSize> = {
 // We therefore need to verify this or it will silently fail.
 const isValidCustomPageSize = (width: number, height: number) => {
   return [width, height].every(x => x > 352);
-};
-
-// Default printing setting
-const defaultPrintingSetting = {
-  // Customizable.
-  pageRange: [] as {from: number, to: number}[],
-  mediaSize: {} as ElectronInternal.MediaSize,
-  landscape: false,
-  headerFooterEnabled: false,
-  marginsType: 0,
-  scaleFactor: 100,
-  shouldPrintBackgrounds: false,
-  shouldPrintSelectionOnly: false,
-  // Non-customizable.
-  printWithCloudPrint: false,
-  printWithPrivet: false,
-  printWithExtension: false,
-  pagesPerSheet: 1,
-  isFirstRequest: false,
-  previewUIID: 0,
-  // True, if the document source is modifiable. e.g. HTML and not PDF.
-  previewModifiable: true,
-  printToPDF: true,
-  deviceName: 'Save as PDF',
-  generateDraftData: true,
-  dpiHorizontal: 72,
-  dpiVertical: 72,
-  rasterizePDF: false,
-  duplex: 0,
-  copies: 1,
-  // 2 = color - see ColorModel in //printing/print_job_constants.h
-  color: 2,
-  collate: true,
-  printerType: 2,
-  title: undefined as string | undefined,
-  url: undefined as string | undefined
 };
 
 // JavaScript implementations of WebContents.
@@ -192,137 +170,137 @@ WebContents.prototype.executeJavaScriptInIsolatedWorld = async function (worldId
 
 let pendingPromise: Promise<any> | undefined;
 WebContents.prototype.printToPDF = async function (options) {
-  const printSettings = {
-    ...defaultPrintingSetting,
-    requestID: getNextId()
+  const printSettings: Record<string, any> = {
+    requestID: getNextId(),
+    landscape: false,
+    displayHeaderFooter: false,
+    headerTemplate: '',
+    footerTemplate: '',
+    printBackground: false,
+    scale: 1,
+    paperWidth: 8.5,
+    paperHeight: 11,
+    marginTop: 0,
+    marginBottom: 0,
+    marginLeft: 0,
+    marginRight: 0,
+    pageRanges: '',
+    preferCSSPageSize: false
   };
 
   if (options.landscape !== undefined) {
     if (typeof options.landscape !== 'boolean') {
-      const error = new Error('landscape must be a Boolean');
-      return Promise.reject(error);
+      return Promise.reject(new Error('landscape must be a Boolean'));
     }
     printSettings.landscape = options.landscape;
   }
 
-  if (options.scaleFactor !== undefined) {
-    if (typeof options.scaleFactor !== 'number') {
-      const error = new Error('scaleFactor must be a Number');
-      return Promise.reject(error);
+  if (options.displayHeaderFooter !== undefined) {
+    if (typeof options.displayHeaderFooter !== 'boolean') {
+      return Promise.reject(new Error('displayHeaderFooter must be a Boolean'));
     }
-    printSettings.scaleFactor = options.scaleFactor;
-  }
-
-  if (options.marginsType !== undefined) {
-    if (typeof options.marginsType !== 'number') {
-      const error = new Error('marginsType must be a Number');
-      return Promise.reject(error);
-    }
-    printSettings.marginsType = options.marginsType;
-  }
-
-  if (options.printSelectionOnly !== undefined) {
-    if (typeof options.printSelectionOnly !== 'boolean') {
-      const error = new Error('printSelectionOnly must be a Boolean');
-      return Promise.reject(error);
-    }
-    printSettings.shouldPrintSelectionOnly = options.printSelectionOnly;
+    printSettings.displayHeaderFooter = options.displayHeaderFooter;
   }
 
   if (options.printBackground !== undefined) {
     if (typeof options.printBackground !== 'boolean') {
-      const error = new Error('printBackground must be a Boolean');
-      return Promise.reject(error);
+      return Promise.reject(new Error('printBackground must be a Boolean'));
     }
     printSettings.shouldPrintBackgrounds = options.printBackground;
   }
 
-  if (options.pageRanges !== undefined) {
-    const pageRanges = options.pageRanges;
-    if (!Object.prototype.hasOwnProperty.call(pageRanges, 'from') || !Object.prototype.hasOwnProperty.call(pageRanges, 'to')) {
-      const error = new Error('pageRanges must be an Object with \'from\' and \'to\' properties');
-      return Promise.reject(error);
+  if (options.scale !== undefined) {
+    if (typeof options.scale !== 'number') {
+      return Promise.reject(new Error('scale must be a Number'));
     }
-
-    if (typeof pageRanges.from !== 'number') {
-      const error = new Error('pageRanges.from must be a Number');
-      return Promise.reject(error);
-    }
-
-    if (typeof pageRanges.to !== 'number') {
-      const error = new Error('pageRanges.to must be a Number');
-      return Promise.reject(error);
-    }
-
-    // Chromium uses 1-based page ranges, so increment each by 1.
-    printSettings.pageRange = [{
-      from: pageRanges.from + 1,
-      to: pageRanges.to + 1
-    }];
+    printSettings.scaleFactor = options.scale;
   }
 
-  if (options.headerFooter !== undefined) {
-    const headerFooter = options.headerFooter;
-    printSettings.headerFooterEnabled = true;
-    if (typeof headerFooter === 'object') {
-      if (!headerFooter.url || !headerFooter.title) {
-        const error = new Error('url and title properties are required for headerFooter');
-        return Promise.reject(error);
+  const { pageSize } = options;
+  if (pageSize !== undefined) {
+    if (typeof pageSize === 'string') {
+      const format = paperFormats[pageSize.toLowerCase()];
+      if (!format) {
+        return Promise.reject(new Error(`Invalid pageSize ${pageSize}`));
       }
-      if (typeof headerFooter.title !== 'string') {
-        const error = new Error('headerFooter.title must be a String');
-        return Promise.reject(error);
-      }
-      printSettings.title = headerFooter.title;
 
-      if (typeof headerFooter.url !== 'string') {
-        const error = new Error('headerFooter.url must be a String');
-        return Promise.reject(error);
-      }
-      printSettings.url = headerFooter.url;
-    } else {
-      const error = new Error('headerFooter must be an Object');
-      return Promise.reject(error);
-    }
-  }
-
-  // Optionally set size for PDF.
-  if (options.pageSize !== undefined) {
-    const pageSize = options.pageSize;
-    if (typeof pageSize === 'object') {
+      printSettings.paperWidth = format.width;
+      printSettings.paperHeight = format.height;
+    } else if (typeof options.pageSize === 'object') {
       if (!pageSize.height || !pageSize.width) {
-        const error = new Error('height and width properties are required for pageSize');
-        return Promise.reject(error);
+        return Promise.reject(new Error('height and width properties are required for pageSize'));
       }
 
-      // Dimensions in Microns - 1 meter = 10^6 microns
-      const height = Math.ceil(pageSize.height);
-      const width = Math.ceil(pageSize.width);
-      if (!isValidCustomPageSize(width, height)) {
-        const error = new Error('height and width properties must be minimum 352 microns.');
-        return Promise.reject(error);
-      }
-
-      printSettings.mediaSize = {
-        name: 'CUSTOM',
-        custom_display_name: 'Custom',
-        height_microns: height,
-        width_microns: width
-      };
-    } else if (Object.prototype.hasOwnProperty.call(PDFPageSizes, pageSize)) {
-      printSettings.mediaSize = PDFPageSizes[pageSize];
+      printSettings.paperWidth = pageSize.width;
+      printSettings.paperHeight = pageSize.height;
     } else {
-      const error = new Error(`Unsupported pageSize: ${pageSize}`);
-      return Promise.reject(error);
+      return Promise.reject(new Error('pageSize must be a String or Object'));
     }
-  } else {
-    printSettings.mediaSize = PDFPageSizes.A4;
   }
 
-  // Chromium expects this in a 0-100 range number, not as float
-  printSettings.scaleFactor = Math.ceil(printSettings.scaleFactor) % 100;
-  // PrinterType enum from //printing/print_job_constants.h
-  printSettings.printerType = 2;
+  const { margins } = options;
+  if (margins !== undefined) {
+    if (typeof margins !== 'object') {
+      return Promise.reject(new Error('margins must be an Object'));
+    }
+
+    if (margins.top !== undefined) {
+      if (typeof margins.top !== 'number') {
+        return Promise.reject(new Error('margins.top must be a Number'));
+      }
+      printSettings.marginTop = margins.top;
+    }
+
+    if (margins.bottom !== undefined) {
+      if (typeof margins.bottom !== 'number') {
+        return Promise.reject(new Error('margins.bottom must be a Number'));
+      }
+      printSettings.marginBottom = margins.bottom;
+    }
+
+    if (margins.left !== undefined) {
+      if (typeof margins.left !== 'number') {
+        return Promise.reject(new Error('margins.left must be a Number'));
+      }
+      printSettings.marginLeft = margins.left;
+    }
+
+    if (margins.right !== undefined) {
+      if (typeof margins.right !== 'number') {
+        return Promise.reject(new Error('margins.right must be a Number'));
+      }
+      printSettings.marginRight = margins.right;
+    }
+  }
+
+  if (options.pageRanges !== undefined) {
+    if (typeof options.pageRanges !== 'string') {
+      return Promise.reject(new Error('printBackground must be a String'));
+    }
+    printSettings.pageRanges = options.pageRanges;
+  }
+
+  if (options.headerTemplate !== undefined) {
+    if (typeof options.headerTemplate !== 'string') {
+      return Promise.reject(new Error('headerTemplate must be a String'));
+    }
+    printSettings.headerTemplate = options.headerTemplate;
+  }
+
+  if (options.footerTemplate !== undefined) {
+    if (typeof options.footerTemplate !== 'string') {
+      return Promise.reject(new Error('footerTemplate must be a String'));
+    }
+    printSettings.footerTemplate = options.footerTemplate;
+  }
+
+  if (options.preferCSSPageSize !== undefined) {
+    if (typeof options.preferCSSPageSize !== 'boolean') {
+      return Promise.reject(new Error('footerTemplate must be a String'));
+    }
+    printSettings.preferCSSPageSize = options.preferCSSPageSize;
+  }
+
   if (this._printToPDF) {
     if (pendingPromise) {
       pendingPromise = pendingPromise.then(() => this._printToPDF(printSettings));
@@ -391,6 +369,17 @@ WebContents.prototype.getPrinters = function () {
   }
 };
 
+WebContents.prototype.getPrintersAsync = async function () {
+  // TODO(nornagon): this API has nothing to do with WebContents and should be
+  // moved.
+  if (printing.getPrinterListAsync) {
+    return printing.getPrinterListAsync();
+  } else {
+    console.error('Error: Printing feature is disabled.');
+    return [];
+  }
+};
+
 WebContents.prototype.loadFile = function (filePath, options = {}) {
   if (typeof filePath !== 'string') {
     throw new Error('Must pass filePath as a string');
@@ -407,41 +396,125 @@ WebContents.prototype.loadFile = function (filePath, options = {}) {
   }));
 };
 
-WebContents.prototype.setWindowOpenHandler = function (handler: (details: Electron.HandlerDetails) => ({action: 'allow'} | {action: 'deny', overrideBrowserWindowOptions?: BrowserWindowConstructorOptions})) {
+WebContents.prototype.loadURL = function (url, options) {
+  if (!options) {
+    options = {};
+  }
+
+  const p = new Promise<void>((resolve, reject) => {
+    const resolveAndCleanup = () => {
+      removeListeners();
+      resolve();
+    };
+    const rejectAndCleanup = (errorCode: number, errorDescription: string, url: string) => {
+      const err = new Error(`${errorDescription} (${errorCode}) loading '${typeof url === 'string' ? url.substr(0, 2048) : url}'`);
+      Object.assign(err, { errno: errorCode, code: errorDescription, url });
+      removeListeners();
+      reject(err);
+    };
+    const finishListener = () => {
+      resolveAndCleanup();
+    };
+    const failListener = (event: Electron.Event, errorCode: number, errorDescription: string, validatedURL: string, isMainFrame: boolean) => {
+      if (isMainFrame) {
+        rejectAndCleanup(errorCode, errorDescription, validatedURL);
+      }
+    };
+
+    let navigationStarted = false;
+    const navigationListener = (event: Electron.Event, url: string, isSameDocument: boolean, isMainFrame: boolean) => {
+      if (isMainFrame) {
+        if (navigationStarted && !isSameDocument) {
+          // the webcontents has started another unrelated navigation in the
+          // main frame (probably from the app calling `loadURL` again); reject
+          // the promise
+          // We should only consider the request aborted if the "navigation" is
+          // actually navigating and not simply transitioning URL state in the
+          // current context.  E.g. pushState and `location.hash` changes are
+          // considered navigation events but are triggered with isSameDocument.
+          // We can ignore these to allow virtual routing on page load as long
+          // as the routing does not leave the document
+          return rejectAndCleanup(-3, 'ERR_ABORTED', url);
+        }
+        navigationStarted = true;
+      }
+    };
+    const stopLoadingListener = () => {
+      // By the time we get here, either 'finish' or 'fail' should have fired
+      // if the navigation occurred. However, in some situations (e.g. when
+      // attempting to load a page with a bad scheme), loading will stop
+      // without emitting finish or fail. In this case, we reject the promise
+      // with a generic failure.
+      // TODO(jeremy): enumerate all the cases in which this can happen. If
+      // the only one is with a bad scheme, perhaps ERR_INVALID_ARGUMENT
+      // would be more appropriate.
+      rejectAndCleanup(-2, 'ERR_FAILED', url);
+    };
+    const removeListeners = () => {
+      this.removeListener('did-finish-load', finishListener);
+      this.removeListener('did-fail-load', failListener);
+      this.removeListener('did-start-navigation', navigationListener);
+      this.removeListener('did-stop-loading', stopLoadingListener);
+      this.removeListener('destroyed', stopLoadingListener);
+    };
+    this.on('did-finish-load', finishListener);
+    this.on('did-fail-load', failListener);
+    this.on('did-start-navigation', navigationListener);
+    this.on('did-stop-loading', stopLoadingListener);
+    this.on('destroyed', stopLoadingListener);
+  });
+  // Add a no-op rejection handler to silence the unhandled rejection error.
+  p.catch(() => {});
+  this._loadURL(url, options);
+  this.emit('load-url', url, options);
+  return p;
+};
+
+WebContents.prototype.setWindowOpenHandler = function (handler: (details: Electron.HandlerDetails) => ({action: 'deny'} | {action: 'allow', overrideBrowserWindowOptions?: BrowserWindowConstructorOptions, outlivesOpener?: boolean})) {
   this._windowOpenHandler = handler;
 };
 
-WebContents.prototype._callWindowOpenHandler = function (event: Electron.Event, url: string, frameName: string, rawFeatures: string): BrowserWindowConstructorOptions | null {
+WebContents.prototype._callWindowOpenHandler = function (event: Electron.Event, details: Electron.HandlerDetails): {browserWindowConstructorOptions: BrowserWindowConstructorOptions | null, outlivesOpener: boolean} {
+  const defaultResponse = {
+    browserWindowConstructorOptions: null,
+    outlivesOpener: false
+  };
   if (!this._windowOpenHandler) {
-    return null;
+    return defaultResponse;
   }
-  const response = this._windowOpenHandler({ url, frameName, features: rawFeatures });
+  const response = this._windowOpenHandler(details);
 
   if (typeof response !== 'object') {
     event.preventDefault();
     console.error(`The window open handler response must be an object, but was instead of type '${typeof response}'.`);
-    return null;
+    return defaultResponse;
   }
 
   if (response === null) {
     event.preventDefault();
     console.error('The window open handler response must be an object, but was instead null.');
-    return null;
+    return defaultResponse;
   }
 
   if (response.action === 'deny') {
     event.preventDefault();
-    return null;
+    return defaultResponse;
   } else if (response.action === 'allow') {
     if (typeof response.overrideBrowserWindowOptions === 'object' && response.overrideBrowserWindowOptions !== null) {
-      return response.overrideBrowserWindowOptions;
+      return {
+        browserWindowConstructorOptions: response.overrideBrowserWindowOptions,
+        outlivesOpener: typeof response.outlivesOpener === 'boolean' ? response.outlivesOpener : false
+      };
     } else {
-      return {};
+      return {
+        browserWindowConstructorOptions: {},
+        outlivesOpener: typeof response.outlivesOpener === 'boolean' ? response.outlivesOpener : false
+      };
     }
   } else {
     event.preventDefault();
     console.error('The window open handler response must be an object with an \'action\' property of \'allow\' or \'deny\'.');
-    return null;
+    return defaultResponse;
   }
 };
 
@@ -475,24 +548,10 @@ const loggingEnabled = () => {
 
 // Add JavaScript wrappers for WebContents class.
 WebContents.prototype._init = function () {
-  // The navigation controller.
-  const navigationController = new NavigationController(this);
-  this.loadURL = navigationController.loadURL.bind(navigationController);
-  this.getURL = navigationController.getURL.bind(navigationController);
-  this.stop = navigationController.stop.bind(navigationController);
-  this.reload = navigationController.reload.bind(navigationController);
-  this.reloadIgnoringCache = navigationController.reloadIgnoringCache.bind(navigationController);
-  this.canGoBack = navigationController.canGoBack.bind(navigationController);
-  this.canGoForward = navigationController.canGoForward.bind(navigationController);
-  this.canGoToIndex = navigationController.canGoToIndex.bind(navigationController);
-  this.canGoToOffset = navigationController.canGoToOffset.bind(navigationController);
-  this.clearHistory = navigationController.clearHistory.bind(navigationController);
-  this.goBack = navigationController.goBack.bind(navigationController);
-  this.goForward = navigationController.goForward.bind(navigationController);
-  this.goToIndex = navigationController.goToIndex.bind(navigationController);
-  this.goToOffset = navigationController.goToOffset.bind(navigationController);
-  this.getActiveIndex = navigationController.getActiveIndex.bind(navigationController);
-  this.length = navigationController.length.bind(navigationController);
+  const prefs = this.getLastWebPreferences() || {};
+  if (!prefs.nodeIntegration && prefs.preload != null && prefs.sandbox == null) {
+    deprecate.log('The default sandbox option for windows without nodeIntegration is changing. Presently, by default, when a window has a preload script, it defaults to being unsandboxed. In Electron 20, this default will be changing, and all windows that have nodeIntegration: false (which is the default) will be sandboxed by default. If your preload script doesn\'t use Node, no action is needed. If your preload script does use Node, either refactor it to move Node usage to the main process, or specify sandbox: false in your WebPreferences.');
+  }
   // Read off the ID at construction time, so that it's accessible even after
   // the underlying C++ WebContents is destroyed.
   const id = this.id;
@@ -537,12 +596,16 @@ WebContents.prototype._init = function () {
       ipcMainInternal.emit(channel, event, ...args);
     } else {
       addReplyToEvent(event);
+      if (this.listenerCount('ipc-message-sync') === 0 && ipcMain.listenerCount(channel) === 0) {
+        console.warn(`WebContents #${this.id} called ipcRenderer.sendSync() with '${channel}' channel without listeners.`);
+      }
       this.emit('ipc-message-sync', event, channel, ...args);
       ipcMain.emit(channel, event, ...args);
     }
   });
 
   this.on('-ipc-ports' as any, function (event: Electron.IpcMainEvent, internal: boolean, channel: string, message: any, ports: any[]) {
+    addSenderFrameToEvent(event);
     event.ports = ports.map(p => new MessagePortMain(p));
     ipcMain.emit(channel, event, message);
   });
@@ -567,9 +630,22 @@ WebContents.prototype._init = function () {
 
   if (this.getType() !== 'remote') {
     // Make new windows requested by links behave like "window.open".
-    this.on('-new-window' as any, (event: ElectronInternal.Event, url: string, frameName: string, disposition: string,
+    this.on('-new-window' as any, (event: ElectronInternal.Event, url: string, frameName: string, disposition: Electron.HandlerDetails['disposition'],
       rawFeatures: string, referrer: Electron.Referrer, postData: PostData) => {
-      const options = this._callWindowOpenHandler(event, url, frameName, rawFeatures);
+      const postBody = postData ? {
+        data: postData,
+        ...parseContentTypeFormat(postData)
+      } : undefined;
+      const details: Electron.HandlerDetails = {
+        url,
+        frameName,
+        features: rawFeatures,
+        referrer,
+        postBody,
+        disposition
+      };
+      const result = this._callWindowOpenHandler(event, details);
+      const options = result.browserWindowConstructorOptions;
       if (!event.defaultPrevented) {
         openGuestWindow({
           event,
@@ -578,18 +654,30 @@ WebContents.prototype._init = function () {
           referrer,
           postData,
           overrideBrowserWindowOptions: options || {},
-          windowOpenArgs: {
-            url,
-            frameName,
-            features: rawFeatures
-          }
+          windowOpenArgs: details,
+          outlivesOpener: result.outlivesOpener
         });
       }
     });
 
     let windowOpenOverriddenOptions: BrowserWindowConstructorOptions | null = null;
-    this.on('-will-add-new-contents' as any, (event: ElectronInternal.Event, url: string, frameName: string, rawFeatures: string) => {
-      windowOpenOverriddenOptions = this._callWindowOpenHandler(event, url, frameName, rawFeatures);
+    let windowOpenOutlivesOpenerOption: boolean = false;
+    this.on('-will-add-new-contents' as any, (event: ElectronInternal.Event, url: string, frameName: string, rawFeatures: string, disposition: Electron.HandlerDetails['disposition'], referrer: Electron.Referrer, postData: PostData) => {
+      const postBody = postData ? {
+        data: postData,
+        ...parseContentTypeFormat(postData)
+      } : undefined;
+      const details: Electron.HandlerDetails = {
+        url,
+        frameName,
+        features: rawFeatures,
+        disposition,
+        referrer,
+        postBody
+      };
+      const result = this._callWindowOpenHandler(event, details);
+      windowOpenOutlivesOpenerOption = result.outlivesOpener;
+      windowOpenOverriddenOptions = result.browserWindowConstructorOptions;
       if (!event.defaultPrevented) {
         const secureOverrideWebPreferences = windowOpenOverriddenOptions ? {
           // Allow setting of backgroundColor as a webPreference even though
@@ -599,19 +687,31 @@ WebContents.prototype._init = function () {
           transparent: windowOpenOverriddenOptions.transparent,
           ...windowOpenOverriddenOptions.webPreferences
         } : undefined;
-        this._setNextChildWebPreferences(
-          makeWebPreferences({ embedder: event.sender, secureOverrideWebPreferences })
-        );
+        // TODO(zcbenz): The features string is parsed twice: here where it is
+        // passed to C++, and in |makeBrowserWindowOptions| later where it is
+        // not actually used since the WebContents is created here.
+        // We should be able to remove the latter once the |new-window| event
+        // is removed.
+        const { webPreferences: parsedWebPreferences } = parseFeatures(rawFeatures);
+        // Parameters should keep same with |makeBrowserWindowOptions|.
+        const webPreferences = makeWebPreferences({
+          embedder: event.sender,
+          insecureParsedWebPreferences: parsedWebPreferences,
+          secureOverrideWebPreferences
+        });
+        this._setNextChildWebPreferences(webPreferences);
       }
     });
 
-    // Create a new browser window for the native implementation of
-    // "window.open", used in sandbox and nativeWindowOpen mode.
+    // Create a new browser window for "window.open"
     this.on('-add-new-contents' as any, (event: ElectronInternal.Event, webContents: Electron.WebContents, disposition: string,
       _userGesture: boolean, _left: number, _top: number, _width: number, _height: number, url: string, frameName: string,
       referrer: Electron.Referrer, rawFeatures: string, postData: PostData) => {
       const overriddenOptions = windowOpenOverriddenOptions || undefined;
+      const outlivesOpener = windowOpenOutlivesOpenerOption;
       windowOpenOverriddenOptions = null;
+      // false is the default
+      windowOpenOutlivesOpenerOption = false;
 
       if ((disposition !== 'foreground-tab' && disposition !== 'new-window' &&
            disposition !== 'background-tab')) {
@@ -631,14 +731,10 @@ WebContents.prototype._init = function () {
           url,
           frameName,
           features: rawFeatures
-        }
+        },
+        outlivesOpener
       });
     });
-
-    const prefs = this.getWebPreferences() || {};
-    if (prefs.webviewTag && prefs.contextIsolation) {
-      deprecate.log('Security Warning: A WebContents was just created with both webviewTag and contextIsolation enabled.  This combination is fundamentally less secure and effectively bypasses the protections of contextIsolation.  We strongly recommend you move away from webviews to OOPIF or BrowserView in order for your app to be more secure');
-    }
   }
 
   this.on('login', (event, ...args) => {
@@ -651,6 +747,14 @@ WebContents.prototype._init = function () {
       process.nextTick(() => {
         owner.emit('ready-to-show');
       });
+    }
+  });
+
+  this.on('select-bluetooth-device', (event, devices, callback) => {
+    if (this.listenerCount('select-bluetooth-device') === 1) {
+      // Cancel it if there are no handlers
+      event.preventDefault();
+      callback('');
     }
   });
 
@@ -697,6 +801,10 @@ export function create (options = {}): Electron.WebContents {
 
 export function fromId (id: string) {
   return binding.fromId(id);
+}
+
+export function fromDevToolsTargetId (targetId: string) {
+  return binding.fromDevToolsTargetId(targetId);
 }
 
 export function getFocusedWebContents () {

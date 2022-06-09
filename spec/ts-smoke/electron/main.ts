@@ -86,10 +86,11 @@ app.whenReady().then(() => {
   mainWindow.webContents.print()
 
   mainWindow.webContents.printToPDF({
-    marginsType: 1,
-    pageSize: 'A3',
+    margins: {
+      top: 1
+    },
     printBackground: true,
-    printSelectionOnly: true,
+    pageRanges: '1-3',
     landscape: true
   }).then((data: Buffer) => console.log(data))
 
@@ -172,7 +173,6 @@ app.whenReady().then(() => {
 app.getLocale()
 
 // Desktop environment integration
-// https://github.com/electron/electron/blob/master/docs/tutorial/desktop-environment-integration.md
 
 app.addRecentDocument('/Users/USERNAME/Desktop/work.type')
 app.clearRecentDocuments()
@@ -371,6 +371,12 @@ if (process.platform === 'win32') {
   systemPreferences.on('color-changed', () => { console.log('color changed') })
   systemPreferences.on('inverted-color-scheme-changed', (_, inverted) => console.log(inverted ? 'inverted' : 'not inverted'))
   console.log('Color for menu is', systemPreferences.getColor('menu'))
+}
+
+if (process.platform === 'darwin') {
+  const value: string = systemPreferences.getUserDefault('Foo', 'string');
+  // @ts-expect-error
+  const value2: number = systemPreferences.getUserDefault('Foo', 'boolean');
 }
 
 // Create the window.
@@ -1098,7 +1104,7 @@ shell.writeShortcutLink('/home/user/Desktop/shortcut.lnk', 'update', shell.readS
 
 session.defaultSession.on('will-download', (event, item, webContents) => {
   event.preventDefault()
-  require('request')(item.getURL(), (data: any) => {
+  require('got')(item.getURL()).then((data: any) => {
     require('fs').writeFileSync('/somewhere', data)
   })
 })

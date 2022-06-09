@@ -18,18 +18,77 @@ const args = require('minimist')(process.argv.slice(2), {
 });
 
 async function main () {
-  const nodeDir = path.resolve(BASE, `out/${utils.getOutDir({ shouldLog: true })}/gen/node_headers`);
+  const outDir = utils.getOutDir({ shouldLog: true });
+  const nodeDir = path.resolve(BASE, 'out', outDir, 'gen', 'node_headers');
   const env = Object.assign({}, process.env, {
     npm_config_nodedir: nodeDir,
     npm_config_msvs_version: '2019',
     npm_config_arch: process.env.NPM_CONFIG_ARCH,
     npm_config_yes: 'true'
   });
-  const { status: buildStatus } = cp.spawnSync(NPX_CMD, ['node-gyp', 'rebuild', '--directory', 'test', '-j', 'max'], {
+
+  const clangDir = path.resolve(BASE, 'third_party', 'llvm-build', 'Release+Asserts', 'bin');
+  const cc = path.resolve(clangDir, 'clang');
+  const cxx = path.resolve(clangDir, 'clang++');
+  const ld = path.resolve(clangDir, 'lld');
+
+  const platformFlags = [];
+  if (process.platform === 'darwin') {
+    const sdkPath = path.resolve(BASE, 'out', outDir, 'sdk', 'xcode_links');
+    const sdks = (await fs.promises.readdir(sdkPath)).filter(fileName => fileName.endsWith('.sdk'));
+    const sdkToUse = sdks[0];
+    if (!sdkToUse) {
+      console.error('Could not find an SDK to use for the NAN tests');
+      process.exit(1);
+    }
+
+    if (sdks.length) {
+      console.warn(`Multiple SDKs found in the xcode_links directory - using ${sdkToUse}`);
+    }
+
+    platformFlags.push(
+      `-isysroot ${path.resolve(sdkPath, sdkToUse)}`
+    );
+  }
+
+  // TODO(ckerr) this is cribbed from read obj/electron/electron_app.ninja.
+  // Maybe it would be better to have this script literally open up that
+  // file and pull cflags_cc from it instead of using bespoke code here?
+  // I think it's unlikely to work; but if it does, it would be more futureproof
+  const cxxflags = [
+    '-std=c++17',
+    '-nostdinc++',
+    `-isystem"${path.resolve(BASE, 'buildtools', 'third_party', 'libc++')}"`,
+    `-isystem"${path.resolve(BASE, 'buildtools', 'third_party', 'libc++', 'trunk', 'include')}"`,
+    `-isystem"${path.resolve(BASE, 'buildtools', 'third_party', 'libc++abi', 'trunk', 'include')}"`,
+    '-fPIC',
+    ...platformFlags
+  ].join(' ');
+
+  const ldflags = [
+    '-stdlib=libc++',
+    '-fuse-ld=lld',
+    `-L"${path.resolve(BASE, 'out', outDir, 'obj', 'buildtools', 'third_party', 'libc++abi')}"`,
+    `-L"${path.resolve(BASE, 'out', outDir, 'obj', 'buildtools', 'third_party', 'libc++')}"`,
+    '-lc++abi',
+    ...platformFlags
+  ].join(' ');
+
+  if (process.platform !== 'win32') {
+    env.CC = cc;
+    env.CFLAGS = cxxflags;
+    env.CXX = cxx;
+    env.LD = ld;
+    env.CXXFLAGS = cxxflags;
+    env.LDFLAGS = ldflags;
+  }
+
+  const { status: buildStatus } = cp.spawnSync(NPX_CMD, ['node-gyp', 'rebuild', '--verbose', '--directory', 'test', '-j', 'max'], {
     env,
     cwd: NAN_DIR,
     stdio: 'inherit'
   });
+
   if (buildStatus !== 0) {
     console.error('Failed to build nan test modules');
     return process.exit(buildStatus);
@@ -48,8 +107,7 @@ async function main () {
   const onlyTests = args.only && args.only.split(',');
 
   const DISABLED_TESTS = [
-    'nannew-test.js',
-    'typedarrays-test.js' // TODO(nornagon): https://github.com/electron/electron/issues/28414
+    'nannew-test.js'
   ];
   const testsToRun = fs.readdirSync(path.resolve(NAN_DIR, 'test', 'js'))
     .filter(test => !DISABLED_TESTS.includes(test))

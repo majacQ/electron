@@ -6,12 +6,14 @@
 
 #include <algorithm>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
+#include "content/public/browser/web_contents_user_data.h"
 #include "shell/browser/browser.h"
+#include "shell/browser/native_window_features.h"
 #include "shell/browser/window_list.h"
 #include "shell/common/color_util.h"
 #include "shell/common/gin_helper/dictionary.h"
@@ -19,16 +21,49 @@
 #include "shell/common/options_switches.h"
 #include "ui/views/widget/widget.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "ui/base/win/shell.h"
 #include "ui/display/win/screen_win.h"
 #endif
+
+#if defined(USE_OZONE)
+#include "ui/base/ui_base_features.h"
+#include "ui/ozone/public/ozone_platform.h"
+#endif
+
+namespace gin {
+
+template <>
+struct Converter<electron::NativeWindow::TitleBarStyle> {
+  static bool FromV8(v8::Isolate* isolate,
+                     v8::Handle<v8::Value> val,
+                     electron::NativeWindow::TitleBarStyle* out) {
+    using TitleBarStyle = electron::NativeWindow::TitleBarStyle;
+    std::string title_bar_style;
+    if (!ConvertFromV8(isolate, val, &title_bar_style))
+      return false;
+    if (title_bar_style == "hidden") {
+      *out = TitleBarStyle::kHidden;
+#if BUILDFLAG(IS_MAC)
+    } else if (title_bar_style == "hiddenInset") {
+      *out = TitleBarStyle::kHiddenInset;
+    } else if (title_bar_style == "customButtonsOnHover") {
+      *out = TitleBarStyle::kCustomButtonsOnHover;
+#endif
+    } else {
+      return false;
+    }
+    return true;
+  }
+};
+
+}  // namespace gin
 
 namespace electron {
 
 namespace {
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 gfx::Size GetExpandedWindowSize(const NativeWindow* window, gfx::Size size) {
   if (!window->transparent() || !ui::win::IsAeroGlassEnabled())
     return size;
@@ -48,15 +83,47 @@ gfx::Size GetExpandedWindowSize(const NativeWindow* window, gfx::Size size) {
 
 NativeWindow::NativeWindow(const gin_helper::Dictionary& options,
                            NativeWindow* parent)
-    : widget_(new views::Widget), parent_(parent) {
+    : widget_(std::make_unique<views::Widget>()), parent_(parent) {
   ++next_id_;
 
   options.Get(options::kFrame, &has_frame_);
   options.Get(options::kTransparent, &transparent_);
   options.Get(options::kEnableLargerThanScreen, &enable_larger_than_screen_);
+  options.Get(options::kTitleBarStyle, &title_bar_style_);
+
+  v8::Local<v8::Value> titlebar_overlay;
+  if (options.Get(options::ktitleBarOverlay, &titlebar_overlay)) {
+    if (titlebar_overlay->IsBoolean()) {
+      options.Get(options::ktitleBarOverlay, &titlebar_overlay_);
+    } else if (titlebar_overlay->IsObject()) {
+      titlebar_overlay_ = true;
+
+      gin_helper::Dictionary titlebar_overlay =
+          gin::Dictionary::CreateEmpty(options.isolate());
+      options.Get(options::ktitleBarOverlay, &titlebar_overlay);
+      int height;
+      if (titlebar_overlay.Get(options::kOverlayHeight, &height))
+        titlebar_overlay_height_ = height;
+
+#if !(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC))
+      DCHECK(false);
+#endif
+    }
+  }
 
   if (parent)
     options.Get("modal", &is_modal_);
+
+#if defined(USE_OZONE)
+  // Ozone X11 likes to prefer custom frames, but we don't need them unless
+  // on Wayland.
+  if (base::FeatureList::IsEnabled(features::kWaylandWindowDecorations) &&
+      !ui::OzonePlatform::GetInstance()
+           ->GetPlatformRuntimeProperties()
+           .supports_server_side_window_decorations) {
+    has_client_frame_ = true;
+  }
+#endif
 
   WindowList::AddWindow(this);
 }
@@ -77,7 +144,7 @@ void NativeWindow::InitFromOptions(const gin_helper::Dictionary& options) {
   if (options.Get(options::kX, &x) && options.Get(options::kY, &y)) {
     SetPosition(gfx::Point(x, y));
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     // FIXME(felixrieseberg): Dirty, dirty workaround for
     // https://github.com/electron/electron/issues/10862
     // Somehow, we need to call `SetBounds` twice to get
@@ -94,22 +161,31 @@ void NativeWindow::InitFromOptions(const gin_helper::Dictionary& options) {
   // On Linux and Window we may already have maximum size defined.
   extensions::SizeConstraints size_constraints(
       use_content_size ? GetContentSizeConstraints() : GetSizeConstraints());
-  int min_height = 0, min_width = 0;
-  if (options.Get(options::kMinHeight, &min_height) |
-      options.Get(options::kMinWidth, &min_width)) {
-    size_constraints.set_minimum_size(gfx::Size(min_width, min_height));
-  }
-  int max_height = INT_MAX, max_width = INT_MAX;
-  if (options.Get(options::kMaxHeight, &max_height) |
-      options.Get(options::kMaxWidth, &max_width)) {
+
+  int min_width = size_constraints.GetMinimumSize().width();
+  int min_height = size_constraints.GetMinimumSize().height();
+  options.Get(options::kMinWidth, &min_width);
+  options.Get(options::kMinHeight, &min_height);
+  size_constraints.set_minimum_size(gfx::Size(min_width, min_height));
+
+  gfx::Size max_size = size_constraints.GetMaximumSize();
+  int max_width = max_size.width() > 0 ? max_size.width() : INT_MAX;
+  int max_height = max_size.height() > 0 ? max_size.height() : INT_MAX;
+  bool have_max_width = options.Get(options::kMaxWidth, &max_width);
+  bool have_max_height = options.Get(options::kMaxHeight, &max_height);
+
+  // By default the window has a default maximum size that prevents it
+  // from being resized larger than the screen, so we should only set this
+  // if th user has passed in values.
+  if (have_max_height || have_max_width || !max_size.IsEmpty())
     size_constraints.set_maximum_size(gfx::Size(max_width, max_height));
-  }
+
   if (use_content_size) {
     SetContentSizeConstraints(size_constraints);
   } else {
     SetSizeConstraints(size_constraints);
   }
-#if defined(OS_WIN) || defined(OS_LINUX)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
   bool resizable;
   if (options.Get(options::kResizable, &resizable)) {
     SetResizable(resizable);
@@ -139,11 +215,11 @@ void NativeWindow::InitFromOptions(const gin_helper::Dictionary& options) {
   bool fullscreen = false;
   if (options.Get(options::kFullscreen, &fullscreen) && !fullscreen) {
     // Disable fullscreen button if 'fullscreen' is specified to false.
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
     fullscreenable = false;
 #endif
   }
-  // Overriden by 'fullscreenable'.
+  // Overridden by 'fullscreenable'.
   options.Get(options::kFullScreenable, &fullscreenable);
   SetFullScreenable(fullscreenable);
   if (fullscreen) {
@@ -157,7 +233,7 @@ void NativeWindow::InitFromOptions(const gin_helper::Dictionary& options) {
   if (options.Get(options::kKiosk, &kiosk) && kiosk) {
     SetKiosk(kiosk);
   }
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   std::string type;
   if (options.Get(options::kVibrancyType, &type)) {
     SetVibrancy(type);
@@ -165,7 +241,7 @@ void NativeWindow::InitFromOptions(const gin_helper::Dictionary& options) {
 #endif
   std::string color;
   if (options.Get(options::kBackgroundColor, &color)) {
-    SetBackgroundColor(ParseHexColor(color));
+    SetBackgroundColor(ParseCSSColor(color));
   } else if (!transparent()) {
     // For normal window, use white as default background.
     SetBackgroundColor(SK_ColorWHITE);
@@ -288,7 +364,7 @@ gfx::Size NativeWindow::GetContentMinimumSize() const {
 
 gfx::Size NativeWindow::GetContentMaximumSize() const {
   gfx::Size maximum_size = GetContentSizeConstraints().GetMaximumSize();
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   return GetContentSizeConstraints().HasMaximumSize()
              ? GetExpandedWindowSize(this, maximum_size)
              : maximum_size;
@@ -327,6 +403,10 @@ bool NativeWindow::IsDocumentEdited() {
 }
 
 void NativeWindow::SetFocusable(bool focusable) {}
+
+bool NativeWindow::IsFocusable() {
+  return false;
+}
 
 void NativeWindow::SetMenu(ElectronMenuModel* menu) {}
 
@@ -391,7 +471,15 @@ void NativeWindow::PreviewFile(const std::string& path,
 
 void NativeWindow::CloseFilePreview() {}
 
-void NativeWindow::NotifyWindowRequestPreferredWith(int* width) {
+gfx::Rect NativeWindow::GetWindowControlsOverlayRect() {
+  return overlay_rect_;
+}
+
+void NativeWindow::SetWindowControlsOverlayRect(const gfx::Rect& overlay_rect) {
+  overlay_rect_ = overlay_rect;
+}
+
+void NativeWindow::NotifyWindowRequestPreferredWidth(int* width) {
   for (NativeWindowObserver& observer : observers_)
     observer.RequestPreferredWidth(width);
 }
@@ -419,11 +507,11 @@ void NativeWindow::NotifyWindowClosed() {
   if (is_closed_)
     return;
 
-  WindowList::RemoveWindow(this);
-
   is_closed_ = true;
   for (NativeWindowObserver& observer : observers_)
     observer.OnWindowClosed();
+
+  WindowList::RemoveWindow(this);
 }
 
 void NativeWindow::NotifyWindowEndSession() {
@@ -477,9 +565,10 @@ void NativeWindow::NotifyWindowRestore() {
 }
 
 void NativeWindow::NotifyWindowWillResize(const gfx::Rect& new_bounds,
+                                          const gfx::ResizeEdge& edge,
                                           bool* prevent_default) {
   for (NativeWindowObserver& observer : observers_)
-    observer.OnWindowWillResize(new_bounds, prevent_default);
+    observer.OnWindowWillResize(new_bounds, edge, prevent_default);
 }
 
 void NativeWindow::NotifyWindowWillMove(const gfx::Rect& new_bounds,
@@ -489,6 +578,7 @@ void NativeWindow::NotifyWindowWillMove(const gfx::Rect& new_bounds,
 }
 
 void NativeWindow::NotifyWindowResize() {
+  NotifyLayoutWindowControlsOverlay();
   for (NativeWindowObserver& observer : observers_)
     observer.OnWindowResize();
 }
@@ -587,7 +677,15 @@ void NativeWindow::NotifyWindowSystemContextMenu(int x,
     observer.OnSystemContextMenu(x, y, prevent_default);
 }
 
-#if defined(OS_WIN)
+void NativeWindow::NotifyLayoutWindowControlsOverlay() {
+  gfx::Rect bounding_rect = GetWindowControlsOverlayRect();
+  if (!bounding_rect.IsEmpty()) {
+    for (NativeWindowObserver& observer : observers_)
+      observer.UpdateWindowControlsOverlay(bounding_rect);
+  }
+}
+
+#if BUILDFLAG(IS_WIN)
 void NativeWindow::NotifyWindowMessage(UINT message,
                                        WPARAM w_param,
                                        LPARAM l_param) {
@@ -620,6 +718,15 @@ std::string NativeWindow::GetAccessibleTitle() {
   return base::UTF16ToUTF8(accessible_title_);
 }
 
+void NativeWindow::HandlePendingFullscreenTransitions() {
+  if (pending_transitions_.empty())
+    return;
+
+  bool next_transition = pending_transitions_.front();
+  pending_transitions_.pop();
+  SetFullScreen(next_transition);
+}
+
 // static
 int32_t NativeWindow::next_id_ = 0;
 
@@ -629,16 +736,19 @@ void NativeWindowRelay::CreateForWebContents(
     base::WeakPtr<NativeWindow> window) {
   DCHECK(web_contents);
   if (!web_contents->GetUserData(UserDataKey())) {
-    web_contents->SetUserData(UserDataKey(),
-                              base::WrapUnique(new NativeWindowRelay(window)));
+    web_contents->SetUserData(
+        UserDataKey(),
+        base::WrapUnique(new NativeWindowRelay(web_contents, window)));
   }
 }
 
-NativeWindowRelay::NativeWindowRelay(base::WeakPtr<NativeWindow> window)
-    : native_window_(window) {}
+NativeWindowRelay::NativeWindowRelay(content::WebContents* web_contents,
+                                     base::WeakPtr<NativeWindow> window)
+    : content::WebContentsUserData<NativeWindowRelay>(*web_contents),
+      native_window_(window) {}
 
 NativeWindowRelay::~NativeWindowRelay() = default;
 
-WEB_CONTENTS_USER_DATA_KEY_IMPL(NativeWindowRelay)
+WEB_CONTENTS_USER_DATA_KEY_IMPL(NativeWindowRelay);
 
 }  // namespace electron

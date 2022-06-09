@@ -1,4 +1,5 @@
-import { app, dialog, BrowserWindow, shell, ipcMain } from 'electron';
+import { shell } from 'electron/common';
+import { app, dialog, BrowserWindow, ipcMain } from 'electron/main';
 import * as path from 'path';
 import * as url from 'url';
 
@@ -41,14 +42,14 @@ ipcMain.handle('bootstrap', (event) => {
   return isTrustedSender(event.sender) ? electronPath : null;
 });
 
-async function createWindow () {
+async function createWindow (backgroundColor?: string) {
   await app.whenReady();
 
   const options: Electron.BrowserWindowConstructorOptions = {
     width: 960,
     height: 620,
     autoHideMenuBar: true,
-    backgroundColor: '#2f3241',
+    backgroundColor,
     webPreferences: {
       preload: path.resolve(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -65,9 +66,9 @@ async function createWindow () {
   mainWindow = new BrowserWindow(options);
   mainWindow.on('ready-to-show', () => mainWindow!.show());
 
-  mainWindow.webContents.on('new-window', (event, url) => {
-    event.preventDefault();
-    shell.openExternal(decorateURL(url));
+  mainWindow.webContents.setWindowOpenHandler(details => {
+    shell.openExternal(decorateURL(details.url));
+    return { action: 'deny' };
   });
 
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, done) => {
@@ -95,7 +96,7 @@ export const loadURL = async (appUrl: string) => {
 };
 
 export const loadFile = async (appPath: string) => {
-  mainWindow = await createWindow();
+  mainWindow = await createWindow(appPath === 'index.html' ? '#2f3241' : undefined);
   mainWindow.loadFile(appPath);
   mainWindow.focus();
 };

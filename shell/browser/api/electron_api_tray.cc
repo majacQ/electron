@@ -64,7 +64,7 @@ gin::WrapperInfo Tray::kWrapperInfo = {gin::kEmbedderNativeGin};
 
 Tray::Tray(v8::Isolate* isolate,
            v8::Local<v8::Value> image,
-           base::Optional<UUID> guid)
+           absl::optional<UUID> guid)
     : tray_icon_(TrayIcon::Create(guid)) {
   SetImage(isolate, image);
   tray_icon_->AddObserver(this);
@@ -75,22 +75,24 @@ Tray::~Tray() = default;
 // static
 gin::Handle<Tray> Tray::New(gin_helper::ErrorThrower thrower,
                             v8::Local<v8::Value> image,
-                            base::Optional<UUID> guid,
+                            absl::optional<UUID> guid,
                             gin::Arguments* args) {
   if (!Browser::Get()->is_ready()) {
     thrower.ThrowError("Cannot create Tray before app is ready");
     return gin::Handle<Tray>();
   }
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   if (!guid.has_value() && args->Length() > 1) {
     thrower.ThrowError("Invalid GUID format");
     return gin::Handle<Tray>();
   }
 #endif
 
-  return gin::CreateHandle(thrower.isolate(),
-                           new Tray(args->isolate(), image, guid));
+  auto handle = gin::CreateHandle(args->isolate(),
+                                  new Tray(args->isolate(), image, guid));
+  handle->Pin(args->isolate());
+  return handle;
 }
 
 void Tray::OnClicked(const gfx::Rect& bounds,
@@ -180,6 +182,7 @@ void Tray::OnDragEnded() {
 }
 
 void Tray::Destroy() {
+  Unpin();
   menu_.Reset();
   tray_icon_.reset();
 }
@@ -196,7 +199,7 @@ void Tray::SetImage(v8::Isolate* isolate, v8::Local<v8::Value> image) {
   if (!NativeImage::TryConvertNativeImage(isolate, image, &native_image))
     return;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   tray_icon_->SetImage(native_image->GetHICON(GetSystemMetrics(SM_CXSMICON)));
 #else
   tray_icon_->SetImage(native_image->image());
@@ -211,7 +214,7 @@ void Tray::SetPressedImage(v8::Isolate* isolate, v8::Local<v8::Value> image) {
   if (!NativeImage::TryConvertNativeImage(isolate, image, &native_image))
     return;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   tray_icon_->SetPressedImage(
       native_image->GetHICON(GetSystemMetrics(SM_CXSMICON)));
 #else
@@ -226,11 +229,11 @@ void Tray::SetToolTip(const std::string& tool_tip) {
 }
 
 void Tray::SetTitle(const std::string& title,
-                    const base::Optional<gin_helper::Dictionary>& options,
+                    const absl::optional<gin_helper::Dictionary>& options,
                     gin::Arguments* args) {
   if (!CheckAlive())
     return;
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   TrayIcon::TitleOptions title_options;
   if (options) {
     if (options->Get("fontType", &title_options.font_type)) {
@@ -258,7 +261,7 @@ void Tray::SetTitle(const std::string& title,
 std::string Tray::GetTitle() {
   if (!CheckAlive())
     return std::string();
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   return tray_icon_->GetTitle();
 #else
   return "";
@@ -268,7 +271,7 @@ std::string Tray::GetTitle() {
 void Tray::SetIgnoreDoubleClickEvents(bool ignore) {
   if (!CheckAlive())
     return;
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   tray_icon_->SetIgnoreDoubleClickEvents(ignore);
 #endif
 }
@@ -276,7 +279,7 @@ void Tray::SetIgnoreDoubleClickEvents(bool ignore) {
 bool Tray::GetIgnoreDoubleClickEvents() {
   if (!CheckAlive())
     return false;
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   return tray_icon_->GetIgnoreDoubleClickEvents();
 #else
   return false;
@@ -309,7 +312,7 @@ void Tray::DisplayBalloon(gin_helper::ErrorThrower thrower,
   options.Get("respectQuietTime", &balloon_options.respect_quiet_time);
 
   if (icon) {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     balloon_options.icon = icon->GetHICON(
         GetSystemMetrics(balloon_options.large_icon ? SM_CXICON : SM_CXSMICON));
 #else
@@ -386,7 +389,6 @@ gfx::Rect Tray::GetBounds() {
 bool Tray::CheckAlive() {
   if (!tray_icon_) {
     v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
-    v8::Locker locker(isolate);
     v8::HandleScope scope(isolate);
     gin_helper::ErrorThrower(isolate).ThrowError("Tray is destroyed");
     return false;

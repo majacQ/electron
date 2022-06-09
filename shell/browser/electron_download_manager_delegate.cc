@@ -5,11 +5,13 @@
 #include "shell/browser/electron_download_manager_delegate.h"
 
 #include <string>
+#include <tuple>
 #include <utility>
 
 #include "base/bind.h"
 #include "base/files/file_util.h"
-#include "base/task/post_task.h"
+#include "base/task/thread_pool.h"
+#include "base/threading/thread_restrictions.h"
 #include "chrome/common/pref_names.h"
 #include "components/download/public/common/download_danger_type.h"
 #include "components/prefs/pref_service.h"
@@ -125,8 +127,7 @@ void ElectronDownloadManagerDelegate::OnDownloadPathGenerated(
       settings.default_path = default_path;
 
     auto* web_preferences = WebContentsPreferences::From(web_contents);
-    const bool offscreen =
-        !web_preferences || web_preferences->IsEnabled(options::kOffscreen);
+    const bool offscreen = !web_preferences || web_preferences->IsOffscreen();
     settings.force_detached = offscreen;
 
     v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
@@ -136,14 +137,15 @@ void ElectronDownloadManagerDelegate::OnDownloadPathGenerated(
         &ElectronDownloadManagerDelegate::OnDownloadSaveDialogDone,
         base::Unretained(this), download_id, std::move(callback));
 
-    ignore_result(dialog_promise.Then(std::move(dialog_callback)));
+    std::ignore = dialog_promise.Then(std::move(dialog_callback));
     file_dialog::ShowSaveDialog(settings, std::move(dialog_promise));
   } else {
-    std::move(callback).Run(path,
-                            download::DownloadItem::TARGET_DISPOSITION_PROMPT,
-                            download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-                            item->GetMixedContentStatus(), path, base::nullopt,
-                            download::DOWNLOAD_INTERRUPT_REASON_NONE);
+    std::move(callback).Run(
+        path, download::DownloadItem::TARGET_DISPOSITION_PROMPT,
+        download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+        item->GetMixedContentStatus(), path, base::FilePath(),
+        std::string() /*mime_type*/, absl::nullopt /*download_schedule*/,
+        download::DOWNLOAD_INTERRUPT_REASON_NONE);
   }
 }
 
@@ -182,7 +184,8 @@ void ElectronDownloadManagerDelegate::OnDownloadSaveDialogDone(
   std::move(download_callback)
       .Run(path, download::DownloadItem::TARGET_DISPOSITION_PROMPT,
            download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
-           item->GetMixedContentStatus(), path, base::nullopt,
+           item->GetMixedContentStatus(), path, base::FilePath(),
+           std::string() /*mime_type*/, absl::nullopt /*download_schedule*/,
            interrupt_reason);
 }
 
@@ -202,7 +205,8 @@ bool ElectronDownloadManagerDelegate::DetermineDownloadTarget(
         download::DownloadItem::TARGET_DISPOSITION_OVERWRITE,
         download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
         download::DownloadItem::MixedContentStatus::UNKNOWN,
-        download->GetForcedFilePath(), base::nullopt,
+        download->GetForcedFilePath(), base::FilePath(),
+        std::string() /*mime_type*/, absl::nullopt /*download_schedule*/,
         download::DOWNLOAD_INTERRUPT_REASON_NONE);
     return true;
   }
@@ -215,7 +219,9 @@ bool ElectronDownloadManagerDelegate::DetermineDownloadTarget(
         save_path, download::DownloadItem::TARGET_DISPOSITION_OVERWRITE,
         download::DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
         download::DownloadItem::MixedContentStatus::UNKNOWN, save_path,
-        base::nullopt, download::DOWNLOAD_INTERRUPT_REASON_NONE);
+        base::FilePath(), std::string() /*mime_type*/,
+        absl::nullopt /*download_schedule*/,
+        download::DOWNLOAD_INTERRUPT_REASON_NONE);
     return true;
   }
 

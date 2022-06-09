@@ -16,9 +16,9 @@
 
 #include "base/mac/scoped_cftyperef.h"
 #include "base/mac/sdk_forward_declarations.h"
-#include "base/sequenced_task_runner.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/values.h"
 #include "chrome/browser/media/webrtc/system_media_capture_permissions_mac.h"
@@ -29,6 +29,7 @@
 #include "shell/common/color_util.h"
 #include "shell/common/gin_converters/gurl_converter.h"
 #include "shell/common/gin_converters/value_converter.h"
+#include "shell/common/node_includes.h"
 #include "shell/common/process_util.h"
 #include "skia/ext/skia_utils_mac.h"
 #include "ui/native_theme/native_theme.h"
@@ -123,6 +124,19 @@ std::string ConvertSystemPermission(
   }
 }
 
+NSNotificationCenter* GetNotificationCenter(NotificationCenterKind kind) {
+  switch (kind) {
+    case NotificationCenterKind::kNSDistributedNotificationCenter:
+      return [NSDistributedNotificationCenter defaultCenter];
+    case NotificationCenterKind::kNSNotificationCenter:
+      return [NSNotificationCenter defaultCenter];
+    case NotificationCenterKind::kNSWorkspaceNotificationCenter:
+      return [[NSWorkspace sharedWorkspace] notificationCenter];
+    default:
+      return nil;
+  }
+}
+
 }  // namespace
 
 void SystemPreferences::PostNotification(const std::string& name,
@@ -140,10 +154,11 @@ void SystemPreferences::PostNotification(const std::string& name,
 }
 
 int SystemPreferences::SubscribeNotification(
-    const std::string& name,
+    v8::Local<v8::Value> maybe_name,
     const NotificationCallback& callback) {
   return DoSubscribeNotification(
-      name, callback, NotificationCenterKind::kNSDistributedNotificationCenter);
+      maybe_name, callback,
+      NotificationCenterKind::kNSDistributedNotificationCenter);
 }
 
 void SystemPreferences::UnsubscribeNotification(int request_id) {
@@ -160,9 +175,9 @@ void SystemPreferences::PostLocalNotification(const std::string& name,
 }
 
 int SystemPreferences::SubscribeLocalNotification(
-    const std::string& name,
+    v8::Local<v8::Value> maybe_name,
     const NotificationCallback& callback) {
-  return DoSubscribeNotification(name, callback,
+  return DoSubscribeNotification(maybe_name, callback,
                                  NotificationCenterKind::kNSNotificationCenter);
 }
 
@@ -182,10 +197,11 @@ void SystemPreferences::PostWorkspaceNotification(
 }
 
 int SystemPreferences::SubscribeWorkspaceNotification(
-    const std::string& name,
+    v8::Local<v8::Value> maybe_name,
     const NotificationCallback& callback) {
   return DoSubscribeNotification(
-      name, callback, NotificationCenterKind::kNSWorkspaceNotificationCenter);
+      maybe_name, callback,
+      NotificationCenterKind::kNSWorkspaceNotificationCenter);
 }
 
 void SystemPreferences::UnsubscribeWorkspaceNotification(int request_id) {
@@ -194,28 +210,25 @@ void SystemPreferences::UnsubscribeWorkspaceNotification(int request_id) {
 }
 
 int SystemPreferences::DoSubscribeNotification(
-    const std::string& name,
+    v8::Local<v8::Value> maybe_name,
     const NotificationCallback& callback,
     NotificationCenterKind kind) {
   int request_id = g_next_id++;
   __block NotificationCallback copied_callback = callback;
-  NSNotificationCenter* center;
-  switch (kind) {
-    case NotificationCenterKind::kNSDistributedNotificationCenter:
-      center = [NSDistributedNotificationCenter defaultCenter];
-      break;
-    case NotificationCenterKind::kNSNotificationCenter:
-      center = [NSNotificationCenter defaultCenter];
-      break;
-    case NotificationCenterKind::kNSWorkspaceNotificationCenter:
-      center = [[NSWorkspace sharedWorkspace] notificationCenter];
-      break;
-    default:
-      break;
+
+  v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
+  std::string name_str;
+  if (!(maybe_name->IsNull() ||
+        gin::ConvertFromV8(isolate, maybe_name, &name_str))) {
+    isolate->ThrowException(v8::Exception::Error(
+        gin::StringToV8(isolate, "Must pass null or a string")));
+    return -1;
   }
 
-  g_id_map[request_id] = [center
-      addObserverForName:base::SysUTF8ToNSString(name)
+  auto* name = maybe_name->IsNull() ? nil : base::SysUTF8ToNSString(name_str);
+
+  g_id_map[request_id] = [GetNotificationCenter(kind)
+      addObserverForName:name
                   object:nil
                    queue:nil
               usingBlock:^(NSNotification* notification) {
@@ -243,21 +256,7 @@ void SystemPreferences::DoUnsubscribeNotification(int request_id,
   auto iter = g_id_map.find(request_id);
   if (iter != g_id_map.end()) {
     id observer = iter->second;
-    NSNotificationCenter* center;
-    switch (kind) {
-      case NotificationCenterKind::kNSDistributedNotificationCenter:
-        center = [NSDistributedNotificationCenter defaultCenter];
-        break;
-      case NotificationCenterKind::kNSNotificationCenter:
-        center = [NSNotificationCenter defaultCenter];
-        break;
-      case NotificationCenterKind::kNSWorkspaceNotificationCenter:
-        center = [[NSWorkspace sharedWorkspace] notificationCenter];
-        break;
-      default:
-        break;
-    }
-    [center removeObserver:observer];
+    [GetNotificationCenter(kind) removeObserver:observer];
     g_id_map.erase(iter);
   }
 }
@@ -420,21 +419,18 @@ std::string SystemPreferences::GetSystemColor(gin_helper::ErrorThrower thrower,
     return "";
   }
 
-  return ToRGBHex(skia::NSSystemColorToSkColor(sysColor));
+  return ToRGBAHex(skia::NSSystemColorToSkColor(sysColor));
 }
 
 bool SystemPreferences::CanPromptTouchID() {
-  if (@available(macOS 10.12.2, *)) {
-    base::scoped_nsobject<LAContext> context([[LAContext alloc] init]);
-    if (![context
-            canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
-                        error:nil])
-      return false;
-    if (@available(macOS 10.13.2, *))
-      return [context biometryType] == LABiometryTypeTouchID;
-    return true;
-  }
-  return false;
+  base::scoped_nsobject<LAContext> context([[LAContext alloc] init]);
+  if (![context
+          canEvaluatePolicy:LAPolicyDeviceOwnerAuthenticationWithBiometrics
+                      error:nil])
+    return false;
+  if (@available(macOS 10.13.2, *))
+    return [context biometryType] == LABiometryTypeTouchID;
+  return true;
 }
 
 v8::Local<v8::Promise> SystemPreferences::PromptTouchID(
@@ -443,46 +439,40 @@ v8::Local<v8::Promise> SystemPreferences::PromptTouchID(
   gin_helper::Promise<void> promise(isolate);
   v8::Local<v8::Promise> handle = promise.GetHandle();
 
-  if (@available(macOS 10.12.2, *)) {
-    base::scoped_nsobject<LAContext> context([[LAContext alloc] init]);
-    base::ScopedCFTypeRef<SecAccessControlRef> access_control =
-        base::ScopedCFTypeRef<SecAccessControlRef>(
-            SecAccessControlCreateWithFlags(
-                kCFAllocatorDefault,
-                kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-                kSecAccessControlPrivateKeyUsage |
-                    kSecAccessControlUserPresence,
-                nullptr));
+  base::scoped_nsobject<LAContext> context([[LAContext alloc] init]);
+  base::ScopedCFTypeRef<SecAccessControlRef> access_control =
+      base::ScopedCFTypeRef<SecAccessControlRef>(
+          SecAccessControlCreateWithFlags(
+              kCFAllocatorDefault, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+              kSecAccessControlPrivateKeyUsage | kSecAccessControlUserPresence,
+              nullptr));
 
-    scoped_refptr<base::SequencedTaskRunner> runner =
-        base::SequencedTaskRunnerHandle::Get();
+  scoped_refptr<base::SequencedTaskRunner> runner =
+      base::SequencedTaskRunnerHandle::Get();
 
-    __block gin_helper::Promise<void> p = std::move(promise);
-    [context
-        evaluateAccessControl:access_control
-                    operation:LAAccessControlOperationUseKeySign
-              localizedReason:[NSString stringWithUTF8String:reason.c_str()]
-                        reply:^(BOOL success, NSError* error) {
-                          if (!success) {
-                            std::string err_msg = std::string(
-                                [error.localizedDescription UTF8String]);
-                            runner->PostTask(
-                                FROM_HERE,
-                                base::BindOnce(
-                                    gin_helper::Promise<void>::RejectPromise,
-                                    std::move(p), std::move(err_msg)));
-                          } else {
-                            runner->PostTask(
-                                FROM_HERE,
-                                base::BindOnce(
-                                    gin_helper::Promise<void>::ResolvePromise,
-                                    std::move(p)));
-                          }
-                        }];
-  } else {
-    promise.RejectWithErrorMessage(
-        "This API is not available on macOS versions older than 10.12.2");
-  }
+  __block gin_helper::Promise<void> p = std::move(promise);
+  [context
+      evaluateAccessControl:access_control
+                  operation:LAAccessControlOperationUseKeySign
+            localizedReason:[NSString stringWithUTF8String:reason.c_str()]
+                      reply:^(BOOL success, NSError* error) {
+                        if (!success) {
+                          std::string err_msg = std::string(
+                              [error.localizedDescription UTF8String]);
+                          runner->PostTask(
+                              FROM_HERE,
+                              base::BindOnce(
+                                  gin_helper::Promise<void>::RejectPromise,
+                                  std::move(p), std::move(err_msg)));
+                        } else {
+                          runner->PostTask(
+                              FROM_HERE,
+                              base::BindOnce(
+                                  gin_helper::Promise<void>::ResolvePromise,
+                                  std::move(p)));
+                        }
+                      }];
+
   return handle;
 }
 
@@ -530,8 +520,7 @@ std::string SystemPreferences::GetColor(gin_helper::ErrorThrower thrower,
   } else if (color == "quaternary-label") {
     sysColor = [NSColor quaternaryLabelColor];
   } else if (color == "scrubber-textured-background") {
-    if (@available(macOS 10.12.2, *))
-      sysColor = [NSColor scrubberTexturedBackgroundColor];
+    sysColor = [NSColor scrubberTexturedBackgroundColor];
   } else if (color == "secondary-label") {
     sysColor = [NSColor secondaryLabelColor];
   } else if (color == "selected-content-background") {

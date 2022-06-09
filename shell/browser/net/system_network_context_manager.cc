@@ -4,16 +4,29 @@
 
 #include "shell/browser/net/system_network_context_manager.h"
 
+#include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "base/command_line.h"
+#include "base/path_service.h"
+#include "base/strings/string_split.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/net/chrome_mojo_proxy_resolver_factory.h"
+#include "chrome/common/chrome_features.h"
+#include "chrome/common/chrome_paths.h"
+#include "chrome/common/chrome_switches.h"
+#include "components/os_crypt/os_crypt.h"
+#include "components/prefs/pref_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/network_service_instance.h"
 #include "content/public/common/content_features.h"
+#include "content/public/common/network_service_util.h"
+#include "electron/fuses.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "net/dns/public/dns_over_https_config.h"
+#include "net/dns/public/util.h"
 #include "net/net_buildflags.h"
 #include "services/cert_verifier/public/mojom/cert_verifier_service_factory.mojom.h"
 #include "services/network/network_service.h"
@@ -21,12 +34,31 @@
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/mojom/network_context.mojom.h"
+#include "shell/browser/api/electron_api_safe_storage.h"
+#include "shell/browser/browser.h"
 #include "shell/browser/electron_browser_client.h"
 #include "shell/common/application_info.h"
+#include "shell/common/electron_paths.h"
 #include "shell/common/options_switches.h"
 #include "url/gurl.h"
 
+#if BUILDFLAG(IS_MAC)
+#include "components/os_crypt/keychain_password_mac.h"
+#endif
+
+#if BUILDFLAG(IS_LINUX)
+#include "components/os_crypt/key_storage_config_linux.h"
+#endif
+
 namespace {
+
+#if BUILDFLAG(IS_WIN)
+namespace {
+
+const char kNetworkServiceSandboxEnabled[] = "net.network_service_sandbox";
+
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 // The global instance of the SystemNetworkContextmanager.
 SystemNetworkContextManager* g_system_network_context_manager = nullptr;
@@ -34,9 +66,6 @@ SystemNetworkContextManager* g_system_network_context_manager = nullptr;
 network::mojom::HttpAuthStaticParamsPtr CreateHttpAuthStaticParams() {
   network::mojom::HttpAuthStaticParamsPtr auth_static_params =
       network::mojom::HttpAuthStaticParams::New();
-
-  auth_static_params->supported_schemes = {"basic", "digest", "ntlm",
-                                           "negotiate"};
 
   return auth_static_params;
 }
@@ -54,6 +83,8 @@ network::mojom::HttpAuthDynamicParamsPtr CreateHttpAuthDynamicParams() {
       command_line->HasSwitch(electron::switches::kEnableAuthNegotiatePort);
   auth_dynamic_params->ntlm_v2_enabled =
       !command_line->HasSwitch(electron::switches::kDisableNTLMv2);
+  auth_dynamic_params->allowed_schemes = {"basic", "digest", "ntlm",
+                                          "negotiate"};
 
   return auth_dynamic_params;
 }
@@ -70,10 +101,14 @@ class SystemNetworkContextManager::URLLoaderFactoryForSystem
     DETACH_FROM_SEQUENCE(sequence_checker_);
   }
 
+  // disable copy
+  URLLoaderFactoryForSystem(const URLLoaderFactoryForSystem&) = delete;
+  URLLoaderFactoryForSystem& operator=(const URLLoaderFactoryForSystem&) =
+      delete;
+
   // mojom::URLLoaderFactory implementation:
   void CreateLoaderAndStart(
       mojo::PendingReceiver<network::mojom::URLLoader> request,
-      int32_t routing_id,
       int32_t request_id,
       uint32_t options,
       const network::ResourceRequest& url_request,
@@ -84,8 +119,8 @@ class SystemNetworkContextManager::URLLoaderFactoryForSystem
     if (!manager_)
       return;
     manager_->GetURLLoaderFactory()->CreateLoaderAndStart(
-        std::move(request), routing_id, request_id, options, url_request,
-        std::move(client), traffic_annotation);
+        std::move(request), request_id, options, url_request, std::move(client),
+        traffic_annotation);
   }
 
   void Clone(mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver)
@@ -111,8 +146,6 @@ class SystemNetworkContextManager::URLLoaderFactoryForSystem
 
   SEQUENCE_CHECKER(sequence_checker_);
   SystemNetworkContextManager* manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(URLLoaderFactoryForSystem);
 };
 
 network::mojom::NetworkContext* SystemNetworkContextManager::GetContext() {
@@ -174,10 +207,6 @@ void SystemNetworkContextManager::ConfigureDefaultNetworkContextParams(
 
   network_context_params->proxy_resolver_factory =
       ChromeMojoProxyResolverFactory::CreateWithSelfOwnedReceiver();
-
-#if !BUILDFLAG(DISABLE_FTP_SUPPORT)
-  network_context_params->enable_ftp_url_support = true;
-#endif
 }
 
 // static
@@ -200,10 +229,24 @@ void SystemNetworkContextManager::DeleteInstance() {
   delete g_system_network_context_manager;
 }
 
+// c.f.
+// https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/net/system_network_context_manager.cc;l=730-740;drc=15a616c8043551a7cb22c4f73a88e83afb94631c;bpv=1;bpt=1
+bool SystemNetworkContextManager::IsNetworkSandboxEnabled() {
+#if BUILDFLAG(IS_WIN)
+  auto* local_state = g_browser_process->local_state();
+  if (local_state && local_state->HasPrefPath(kNetworkServiceSandboxEnabled)) {
+    return local_state->GetBoolean(kNetworkServiceSandboxEnabled);
+  }
+#endif  // BUILDFLAG(IS_WIN)
+  // If no policy is specified, then delegate to global sandbox configuration.
+  return sandbox::policy::features::IsNetworkSandboxEnabled();
+}
+
 SystemNetworkContextManager::SystemNetworkContextManager(
     PrefService* pref_service)
     : proxy_config_monitor_(pref_service) {
-  shared_url_loader_factory_ = new URLLoaderFactoryForSystem(this);
+  shared_url_loader_factory_ =
+      base::MakeRefCounted<URLLoaderFactoryForSystem>(this);
 }
 
 SystemNetworkContextManager::~SystemNetworkContextManager() {
@@ -219,6 +262,48 @@ void SystemNetworkContextManager::OnNetworkServiceCreated(
   network_service->CreateNetworkContext(
       network_context_.BindNewPipeAndPassReceiver(),
       CreateNetworkContextParams());
+
+  net::SecureDnsMode default_secure_dns_mode = net::SecureDnsMode::kOff;
+  std::string default_doh_templates;
+  if (base::FeatureList::IsEnabled(features::kDnsOverHttps)) {
+    if (features::kDnsOverHttpsFallbackParam.Get()) {
+      default_secure_dns_mode = net::SecureDnsMode::kAutomatic;
+    } else {
+      default_secure_dns_mode = net::SecureDnsMode::kSecure;
+    }
+    default_doh_templates = features::kDnsOverHttpsTemplatesParam.Get();
+  }
+
+  net::DnsOverHttpsConfig doh_config;
+  if (!default_doh_templates.empty() &&
+      default_secure_dns_mode != net::SecureDnsMode::kOff) {
+    doh_config = *net::DnsOverHttpsConfig::FromString(default_doh_templates);
+  }
+
+  bool additional_dns_query_types_enabled = true;
+
+  // Configure the stub resolver. This must be done after the system
+  // NetworkContext is created, but before anything has the chance to use it.
+  content::GetNetworkService()->ConfigureStubHostResolver(
+      base::FeatureList::IsEnabled(features::kAsyncDns),
+      default_secure_dns_mode, doh_config, additional_dns_query_types_enabled);
+
+  std::string app_name = electron::Browser::Get()->GetName();
+#if BUILDFLAG(IS_MAC)
+  KeychainPassword::GetServiceName() = app_name + " Safe Storage";
+  KeychainPassword::GetAccountName() = app_name;
+#endif
+
+  // The OSCrypt keys are process bound, so if network service is out of
+  // process, send it the required key.
+  if (content::IsOutOfProcessNetworkService() &&
+      electron::fuses::IsCookieEncryptionEnabled()) {
+    network_service->SetEncryptionKey(OSCrypt::GetRawEncryptionKey());
+  }
+
+#if DCHECK_IS_ON()
+  electron::safestorage::SetElectronCryptoReady(true);
+#endif
 }
 
 network::mojom::NetworkContextParamsPtr
@@ -226,8 +311,6 @@ SystemNetworkContextManager::CreateNetworkContextParams() {
   // TODO(mmenke): Set up parameters here (in memory cookie store, etc).
   network::mojom::NetworkContextParamsPtr network_context_params =
       CreateDefaultNetworkContextParams();
-
-  network_context_params->context_name = std::string("system");
 
   network_context_params->user_agent =
       electron::ElectronBrowserClient::Get()->GetUserAgent();

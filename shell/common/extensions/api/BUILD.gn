@@ -36,8 +36,8 @@ group("extensions_features") {
 
 generated_json_strings("generated_api_json_strings") {
   sources = [
+    "cryptotoken_private.idl",
     "extension.json",
-    "i18n.json",
     "resources_private.idl",
     "tabs.json",
   ]
@@ -54,7 +54,7 @@ generated_json_strings("generated_api_json_strings") {
 
 generated_types("generated_api_types") {
   sources = [
-    "i18n.json",
+    "cryptotoken_private.idl",
     "resources_private.idl",
     "tabs.json",
   ]

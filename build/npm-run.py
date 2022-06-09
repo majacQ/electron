@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 from __future__ import print_function
 import os
 import subprocess
@@ -15,12 +15,6 @@ args = [cmd, "run",
 try:
     subprocess.check_output(args, stderr=subprocess.STDOUT)
 except subprocess.CalledProcessError as e:
-    print(
-        "NPM script '"
-        + sys.argv[2]
-        + "' failed with code '"
-        + str(e.returncode)
-        + "':\n"
-        + e.output
-    )
+    error_msg = "NPM script '{}' failed with code '{}':\n".format(sys.argv[2], e.returncode)
+    print(error_msg + e.output.decode('utf8'))
     sys.exit(e.returncode)

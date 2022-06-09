@@ -4,6 +4,7 @@
 
 #include "shell/common/gin_helper/callback.h"
 
+#include "base/cxx17_backports.h"
 #include "content/public/browser/browser_thread.h"
 #include "gin/dictionary.h"
 
@@ -14,7 +15,7 @@ namespace {
 struct TranslaterHolder {
   explicit TranslaterHolder(v8::Isolate* isolate)
       : handle(isolate, v8::External::New(isolate, this)) {
-    handle.SetWeak(this, &GC, v8::WeakCallbackType::kFinalizer);
+    handle.SetWeak(this, &GC, v8::WeakCallbackType::kParameter);
   }
   ~TranslaterHolder() {
     if (!handle.IsEmpty()) {
@@ -85,7 +86,7 @@ class RefCountedGlobal
     : public base::RefCountedThreadSafe<RefCountedGlobal<T>, DeleteOnUIThread> {
  public:
   RefCountedGlobal(v8::Isolate* isolate, v8::Local<v8::Value> value)
-      : handle_(isolate, v8::Local<T>::Cast(value)) {}
+      : handle_(isolate, value.As<T>()) {}
 
   bool IsAlive() const { return !handle_.IsEmpty(); }
 
@@ -95,8 +96,6 @@ class RefCountedGlobal
 
  private:
   v8::Global<T> handle_;
-
-  DISALLOW_COPY_AND_ASSIGN(RefCountedGlobal);
 };
 
 SafeV8Function::SafeV8Function(v8::Isolate* isolate, v8::Local<v8::Value> value)
@@ -146,10 +145,9 @@ v8::Local<v8::Value> BindFunctionWith(v8::Isolate* isolate,
   v8::MaybeLocal<v8::Value> bind =
       func->Get(context, gin::StringToV8(isolate, "bind"));
   CHECK(!bind.IsEmpty());
-  v8::Local<v8::Function> bind_func =
-      v8::Local<v8::Function>::Cast(bind.ToLocalChecked());
+  v8::Local<v8::Function> bind_func = bind.ToLocalChecked().As<v8::Function>();
   v8::Local<v8::Value> converted[] = {func, arg1, arg2};
-  return bind_func->Call(context, func, base::size(converted), converted)
+  return bind_func->Call(context, func, std::size(converted), converted)
       .ToLocalChecked();
 }
 

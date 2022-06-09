@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """Git helper functions.
 
@@ -77,25 +77,6 @@ def am(repo, patch_data, threeway=False, directory=None, exclude=None,
       proc.returncode))
 
 
-def apply_patch(repo, patch_path, directory=None, index=False, reverse=False):
-  args = ['git', '-C', repo, 'apply',
-          '--ignore-space-change',
-          '--ignore-whitespace',
-          '--whitespace', 'fix'
-          ]
-  if directory:
-    args += ['--directory', directory]
-  if index:
-    args += ['--index']
-  if reverse:
-    args += ['--reverse']
-  args += ['--', patch_path]
-
-  return_code = subprocess.call(args)
-  applied_successfully = (return_code == 0)
-  return applied_successfully
-
-
 def import_patches(repo, **kwargs):
   """same as am(), but we save the upstream HEAD so we can refer to it when we
   later export patches"""
@@ -107,51 +88,11 @@ def import_patches(repo, **kwargs):
   am(repo=repo, **kwargs)
 
 
-def get_patch(repo, commit_hash):
-  args = ['git', '-C', repo, 'diff-tree',
-          '-p',
-          commit_hash,
-          '--'  # Explicitly tell Git `commit_hash` is a revision, not a path.
-          ]
-
-  return subprocess.check_output(args).decode('utf-8')
-
-
-def get_head_commit(repo):
-  args = ['git', '-C', repo, 'rev-parse', 'HEAD']
-
-  return subprocess.check_output(args).decode('utf-8').strip()
-
-
 def update_ref(repo, ref, newvalue):
   args = ['git', '-C', repo, 'update-ref', ref, newvalue]
 
   return subprocess.check_call(args)
 
-
-def reset(repo):
-  args = ['git', '-C', repo, 'reset']
-
-  subprocess.check_call(args)
-
-
-def commit(repo, author, message):
-  """Commit whatever in the index is now."""
-
-  # Let's setup committer info so git won't complain about it being missing.
-  # TODO: Is there a better way to set committer's name and email?
-  env = os.environ.copy()
-  env['GIT_COMMITTER_NAME'] = 'Anonymous Committer'
-  env['GIT_COMMITTER_EMAIL'] = 'anonymous@electronjs.org'
-
-  args = ['git', '-C', repo, 'commit',
-          '--author', author,
-          '--message', message
-          ]
-
-  return_code = subprocess.call(args, env=env)
-  committed_successfully = (return_code == 0)
-  return committed_successfully
 
 def get_upstream_head(repo):
   args = [
@@ -288,12 +229,19 @@ def remove_patch_filename(patch):
     force_keep_next_line = l.startswith('Subject: ')
 
 
+def to_utf8(patch):
+  """Python 2/3 compatibility: unicode has been renamed to str in Python3"""
+  if sys.version_info[0] >= 3:
+    return str(patch, "utf-8")
+
+  return unicode(patch, "utf-8")
+
+
 def export_patches(repo, out_dir, patch_range=None, dry_run=False):
   if patch_range is None:
     patch_range, num_patches = guess_base_commit(repo)
-    sys.stderr.write(
-        "Exporting {} patches in {} since {}\n".format(num_patches, repo, patch_range[0:7])
-    )
+    sys.stderr.write("Exporting {} patches in {} since {}\n".format(
+        num_patches, repo, patch_range[0:7]))
   patch_data = format_patch(repo, patch_range)
   patches = split_patches(patch_data)
 
@@ -310,7 +258,7 @@ def export_patches(repo, out_dir, patch_range=None, dry_run=False):
     for patch in patches:
       filename = get_file_name(patch)
       filepath = posixpath.join(out_dir, filename)
-      existing_patch = unicode(io.open(filepath, 'rb').read(), "utf-8")
+      existing_patch = to_utf8(io.open(filepath, 'rb').read())
       formatted_patch = join_patch(patch)
       if formatted_patch != existing_patch:
         bad_patches.append(filename)
@@ -320,7 +268,7 @@ def export_patches(repo, out_dir, patch_range=None, dry_run=False):
           out_dir, len(bad_patches), "\n-- ".join(bad_patches)
         )
       )
-      exit(1)
+      sys.exit(1)
   else:
     # Remove old patches so that deleted commits are correctly reflected in the
     # patch files (as a removed file)
@@ -343,4 +291,3 @@ def export_patches(repo, out_dir, patch_range=None, dry_run=False):
         ) as f:
           f.write(formatted_patch.encode('utf-8'))
         pl.write(filename + '\n')
-
