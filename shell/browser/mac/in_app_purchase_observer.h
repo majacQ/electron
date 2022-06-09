@@ -2,14 +2,15 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_MAC_IN_APP_PURCHASE_OBSERVER_H_
-#define SHELL_BROWSER_MAC_IN_APP_PURCHASE_OBSERVER_H_
+#ifndef ELECTRON_SHELL_BROWSER_MAC_IN_APP_PURCHASE_OBSERVER_H_
+#define ELECTRON_SHELL_BROWSER_MAC_IN_APP_PURCHASE_OBSERVER_H_
 
 #include <string>
 #include <vector>
 
 #include "base/callback.h"
 #include "base/memory/weak_ptr.h"
+#include "third_party/abseil-cpp/absl/types/optional.h"
 
 #if defined(__OBJC__)
 @class InAppTransactionObserver;
@@ -21,9 +22,27 @@ namespace in_app_purchase {
 
 // --------------------------- Structures ---------------------------
 
+struct PaymentDiscount {
+  std::string identifier;
+  std::string keyIdentifier;
+  std::string nonce;
+  std::string signature;
+  int timestamp;
+
+  PaymentDiscount();
+  PaymentDiscount(const PaymentDiscount&);
+  ~PaymentDiscount();
+};
+
 struct Payment {
   std::string productIdentifier = "";
   int quantity = 1;
+  std::string applicationUsername;
+  absl::optional<PaymentDiscount> paymentDiscount;
+
+  Payment();
+  Payment(const Payment&);
+  ~Payment();
 };
 
 struct Transaction {
@@ -62,4 +81,4 @@ class TransactionObserver {
 
 }  // namespace in_app_purchase
 
-#endif  // SHELL_BROWSER_MAC_IN_APP_PURCHASE_OBSERVER_H_
+#endif  // ELECTRON_SHELL_BROWSER_MAC_IN_APP_PURCHASE_OBSERVER_H_

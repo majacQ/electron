@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_PRINTING_PRINT_PREVIEW_MESSAGE_HANDLER_H_
-#define SHELL_BROWSER_PRINTING_PRINT_PREVIEW_MESSAGE_HANDLER_H_
+#ifndef ELECTRON_SHELL_BROWSER_PRINTING_PRINT_PREVIEW_MESSAGE_HANDLER_H_
+#define ELECTRON_SHELL_BROWSER_PRINTING_PRINT_PREVIEW_MESSAGE_HANDLER_H_
 
 #include <map>
 
@@ -90,6 +90,8 @@ class PrintPreviewMessageHandler
   using PromiseMap = std::map<int, gin_helper::Promise<v8::Local<v8::Value>>>;
   PromiseMap promise_map_;
 
+  // TODO(clavin): refactor to use the WebContents provided by the
+  // WebContentsUserData base class instead of storing a duplicate ref
   content::WebContents* web_contents_ = nullptr;
 
   mojo::AssociatedRemote<printing::mojom::PrintRenderFrame> print_render_frame_;
@@ -103,4 +105,4 @@ class PrintPreviewMessageHandler
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_PRINTING_PRINT_PREVIEW_MESSAGE_HANDLER_H_
+#endif  // ELECTRON_SHELL_BROWSER_PRINTING_PRINT_PREVIEW_MESSAGE_HANDLER_H_

@@ -35,7 +35,7 @@ page you load in your renderer executes code in this world.
 
 When `contextIsolation` is enabled in your `webPreferences` (this is the default behavior since Electron 12.0.0), your `preload` scripts run in an
 "Isolated World".  You can read more about context isolation and what it affects in the
-[security](../tutorial/security.md#3-enable-context-isolation-for-remote-content) docs.
+[security](../tutorial/security.md#3-enable-context-isolation) docs.
 
 ## Methods
 
@@ -102,8 +102,8 @@ has been included below for completeness:
 | `boolean` | Simple | ✅ | ✅ | N/A |
 | `Object` | Complex | ✅ | ✅ | Keys must be supported using only "Simple" types in this table.  Values must be supported in this table.  Prototype modifications are dropped.  Sending custom classes will copy values but not the prototype. |
 | `Array` | Complex | ✅ | ✅ | Same limitations as the `Object` type |
-| `Error` | Complex | ✅ | ✅ | Errors that are thrown are also copied, this can result in the message and stack trace of the error changing slightly due to being thrown in a different context |
-| `Promise` | Complex | ✅ | ✅ | Promises are only proxied if they are the return value or exact parameter.  Promises nested in arrays or objects will be dropped. |
+| `Error` | Complex | ✅ | ✅ | Errors that are thrown are also copied, this can result in the message and stack trace of the error changing slightly due to being thrown in a different context, and any custom properties on the Error object [will be lost](https://github.com/electron/electron/issues/25596) |
+| `Promise` | Complex | ✅ | ✅ | N/A
 | `Function` | Complex | ✅ | ✅ | Prototype modifications are dropped.  Sending classes or constructors will not work. |
 | [Cloneable Types](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Structured_clone_algorithm) | Simple | ✅ | ✅ | See the linked document on cloneable types |
 | `Element` | Complex | ✅ | ✅ | Prototype modifications are dropped.  Sending custom elements will not work. |

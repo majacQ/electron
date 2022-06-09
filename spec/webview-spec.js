@@ -7,7 +7,7 @@ const { emittedOnce, waitForEvent } = require('./events-helpers');
 const { ifdescribe, ifit, delay } = require('./spec-helpers');
 
 const features = process._linkedBinding('electron_common_features');
-const nativeModulesEnabled = process.env.ELECTRON_SKIP_NATIVE_MODULE_TESTS;
+const nativeModulesEnabled = !process.env.ELECTRON_SKIP_NATIVE_MODULE_TESTS;
 
 /* Most of the APIs here don't use standard callbacks */
 /* eslint-disable standard/no-callback-literal */
@@ -490,7 +490,6 @@ describe('<webview> tag', function () {
 
     generateSpecs('without sandbox');
     generateSpecs('with sandbox', 'sandbox=yes');
-    generateSpecs('with nativeWindowOpen', 'nativeWindowOpen=yes');
   });
 
   describe('webpreferences attribute', () => {
@@ -911,20 +910,6 @@ describe('<webview> tag', function () {
   });
 
   describe('executeJavaScript', () => {
-    it('should support user gesture', async () => {
-      await loadWebView(webview, {
-        src: `file://${fixtures}/pages/fullscreen.html`
-      });
-
-      // Event handler has to be added before js execution.
-      const waitForEnterHtmlFullScreen = waitForEvent(webview, 'enter-html-full-screen');
-
-      const jsScript = "document.querySelector('video').webkitRequestFullscreen()";
-      webview.executeJavaScript(jsScript, true);
-
-      return waitForEnterHtmlFullScreen;
-    });
-
     it('can return the result of the executed script', async () => {
       await loadWebView(webview, {
         src: 'about:blank'
@@ -1084,7 +1069,10 @@ describe('<webview> tag', function () {
     });
   });
 
-  describe('<webview>.capturePage()', () => {
+  // TODO(nornagon): this seems to have become much less reliable as of
+  // https://github.com/electron/electron/pull/32419. Tracked at
+  // https://github.com/electron/electron/issues/32705.
+  describe.skip('<webview>.capturePage()', () => {
     before(function () {
       // TODO(miniak): figure out why this is failing on windows
       if (process.platform === 'win32') {
@@ -1161,6 +1149,14 @@ describe('<webview> tag', function () {
         module: 'undefined',
         process: 'undefined',
         global: 'undefined'
+      });
+    });
+
+    it('handler modifying params.instanceId does not break <webview>', async () => {
+      ipcRenderer.send('break-next-will-attach-webview');
+
+      await startLoadingWebViewAndWaitForMessage(webview, {
+        src: `file://${fixtures}/pages/a.html`
       });
     });
 

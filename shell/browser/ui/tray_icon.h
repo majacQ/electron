@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_UI_TRAY_ICON_H_
-#define SHELL_BROWSER_UI_TRAY_ICON_H_
+#ifndef ELECTRON_SHELL_BROWSER_UI_TRAY_ICON_H_
+#define ELECTRON_SHELL_BROWSER_UI_TRAY_ICON_H_
 
 #include <string>
 #include <vector>
@@ -20,7 +20,7 @@ class TrayIcon {
  public:
   static TrayIcon* Create(absl::optional<UUID> guid);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   using ImageType = HICON;
 #else
   using ImageType = const gfx::Image&;
@@ -44,7 +44,7 @@ class TrayIcon {
   // status icon (e.g. Ubuntu Unity).
   virtual void SetToolTip(const std::string& tool_tip) = 0;
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // Set/Get flag determining whether to ignore double click events.
   virtual void SetIgnoreDoubleClickEvents(bool ignore) = 0;
   virtual bool GetIgnoreDoubleClickEvents() = 0;
@@ -63,7 +63,7 @@ class TrayIcon {
 
   struct BalloonOptions {
     IconType icon_type = IconType::kCustom;
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     HICON icon = nullptr;
 #else
     gfx::Image icon;
@@ -137,4 +137,4 @@ class TrayIcon {
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_UI_TRAY_ICON_H_
+#endif  // ELECTRON_SHELL_BROWSER_UI_TRAY_ICON_H_

@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_API_ELECTRON_API_MENU_H_
-#define SHELL_BROWSER_API_ELECTRON_API_MENU_H_
+#ifndef ELECTRON_SHELL_BROWSER_API_ELECTRON_API_MENU_H_
+#define ELECTRON_SHELL_BROWSER_API_ELECTRON_API_MENU_H_
 
 #include <memory>
 #include <string>
@@ -36,7 +36,7 @@ class Menu : public gin::Wrappable<Menu>,
   // gin::Wrappable
   static gin::WrapperInfo kWrapperInfo;
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // Set the global menubar.
   static void SetApplicationMenu(Menu* menu);
 
@@ -68,7 +68,7 @@ class Menu : public gin::Wrappable<Menu>,
       bool use_default_accelerator,
       ui::Accelerator* accelerator) const override;
   bool ShouldRegisterAcceleratorForCommandId(int command_id) const override;
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   bool GetSharingItemForCommandId(
       int command_id,
       ElectronMenuModel::SharingItem* item) const override;
@@ -150,4 +150,4 @@ struct Converter<electron::ElectronMenuModel*> {
 
 }  // namespace gin
 
-#endif  // SHELL_BROWSER_API_ELECTRON_API_MENU_H_
+#endif  // ELECTRON_SHELL_BROWSER_API_ELECTRON_API_MENU_H_

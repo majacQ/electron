@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_COMMON_GIN_HELPER_TRACKABLE_OBJECT_H_
-#define SHELL_COMMON_GIN_HELPER_TRACKABLE_OBJECT_H_
+#ifndef ELECTRON_SHELL_COMMON_GIN_HELPER_TRACKABLE_OBJECT_H_
+#define ELECTRON_SHELL_COMMON_GIN_HELPER_TRACKABLE_OBJECT_H_
 
 #include <vector>
 
@@ -117,11 +117,11 @@ class TrackableObject : public TrackableObjectBase, public EventEmitter<T> {
   ~TrackableObject() override { RemoveFromWeakMap(); }
 
   void InitWith(v8::Isolate* isolate, v8::Local<v8::Object> wrapper) override {
-    gin_helper::WrappableBase::InitWith(isolate, wrapper);
     if (!weak_map_) {
       weak_map_ = new electron::KeyWeakMap<int32_t>;
     }
     weak_map_->Set(isolate, weak_map_id_, wrapper);
+    gin_helper::WrappableBase::InitWith(isolate, wrapper);
   }
 
  private:
@@ -137,4 +137,4 @@ electron::KeyWeakMap<int32_t>* TrackableObject<T>::weak_map_ = nullptr;
 
 }  // namespace gin_helper
 
-#endif  // SHELL_COMMON_GIN_HELPER_TRACKABLE_OBJECT_H_
+#endif  // ELECTRON_SHELL_COMMON_GIN_HELPER_TRACKABLE_OBJECT_H_

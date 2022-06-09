@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_SERIAL_SERIAL_CHOOSER_CONTROLLER_H_
-#define SHELL_BROWSER_SERIAL_SERIAL_CHOOSER_CONTROLLER_H_
+#ifndef ELECTRON_SHELL_BROWSER_SERIAL_SERIAL_CHOOSER_CONTROLLER_H_
+#define ELECTRON_SHELL_BROWSER_SERIAL_SERIAL_CHOOSER_CONTROLLER_H_
 
 #include <string>
 #include <vector>
@@ -46,7 +46,8 @@ class SerialChooserController final : public SerialChooserContext::PortObserver,
   // SerialChooserContext::PortObserver:
   void OnPortAdded(const device::mojom::SerialPortInfo& port) override;
   void OnPortRemoved(const device::mojom::SerialPortInfo& port) override;
-  void OnPortManagerConnectionError() override {}
+  void OnPortManagerConnectionError() override;
+  void OnPermissionRevoked(const url::Origin& origin) override {}
 
  private:
   api::Session* GetSession();
@@ -72,4 +73,4 @@ class SerialChooserController final : public SerialChooserContext::PortObserver,
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_SERIAL_SERIAL_CHOOSER_CONTROLLER_H_
+#endif  // ELECTRON_SHELL_BROWSER_SERIAL_SERIAL_CHOOSER_CONTROLLER_H_

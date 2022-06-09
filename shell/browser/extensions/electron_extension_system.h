@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_EXTENSIONS_ELECTRON_EXTENSION_SYSTEM_H_
-#define SHELL_BROWSER_EXTENSIONS_ELECTRON_EXTENSION_SYSTEM_H_
+#ifndef ELECTRON_SHELL_BROWSER_EXTENSIONS_ELECTRON_EXTENSION_SYSTEM_H_
+#define ELECTRON_SHELL_BROWSER_EXTENSIONS_ELECTRON_EXTENSION_SYSTEM_H_
 
 #include <memory>
 #include <string>
@@ -76,8 +76,7 @@ class ElectronExtensionSystem : public ExtensionSystem {
       const Extension* extension,
       base::OnceClosure callback) override;
   void UnregisterExtensionWithRequestContexts(
-      const std::string& extension_id,
-      const UnloadedExtensionReason reason) override;
+      const std::string& extension_id) override;
   const base::OneShotEvent& ready() const override;
   bool is_ready() const override;
   ContentVerifier* content_verifier() override;
@@ -122,4 +121,4 @@ class ElectronExtensionSystem : public ExtensionSystem {
 
 }  // namespace extensions
 
-#endif  // SHELL_BROWSER_EXTENSIONS_ELECTRON_EXTENSION_SYSTEM_H_
+#endif  // ELECTRON_SHELL_BROWSER_EXTENSIONS_ELECTRON_EXTENSION_SYSTEM_H_

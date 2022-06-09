@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_API_ELECTRON_API_NATIVE_THEME_H_
-#define SHELL_BROWSER_API_ELECTRON_API_NATIVE_THEME_H_
+#ifndef ELECTRON_SHELL_BROWSER_API_ELECTRON_API_NATIVE_THEME_H_
+#define ELECTRON_SHELL_BROWSER_API_ELECTRON_API_NATIVE_THEME_H_
 
 #include "gin/handle.h"
 #include "gin/wrappable.h"
@@ -38,7 +38,7 @@ class NativeTheme : public gin::Wrappable<NativeTheme>,
   ~NativeTheme() override;
 
   void SetThemeSource(ui::NativeTheme::ThemeSource override);
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   void UpdateMacOSAppearanceForOverrideValue(
       ui::NativeTheme::ThemeSource override);
 #endif
@@ -46,6 +46,7 @@ class NativeTheme : public gin::Wrappable<NativeTheme>,
   bool ShouldUseDarkColors();
   bool ShouldUseHighContrastColors();
   bool ShouldUseInvertedColorScheme();
+  bool InForcedColorsMode();
 
   // ui::NativeThemeObserver:
   void OnNativeThemeUpdated(ui::NativeTheme* theme) override;
@@ -73,4 +74,4 @@ struct Converter<ui::NativeTheme::ThemeSource> {
 
 }  // namespace gin
 
-#endif  // SHELL_BROWSER_API_ELECTRON_API_NATIVE_THEME_H_
+#endif  // ELECTRON_SHELL_BROWSER_API_ELECTRON_API_NATIVE_THEME_H_

@@ -15,11 +15,9 @@
 #include "base/containers/id_map.h"
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
-#include "base/macros.h"
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/current_thread.h"
-#include "base/task/post_task.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "base/threading/sequenced_task_runner_handle.h"
@@ -54,8 +52,6 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
-#include "content/public/browser/security_style_explanation.h"
-#include "content/public/browser/security_style_explanations.h"
 #include "content/public/browser/service_worker_context.h"
 #include "content/public/browser/site_instance.h"
 #include "content/public/browser/storage_partition.h"
@@ -146,17 +142,17 @@
 #include "shell/browser/osr/osr_web_contents_view.h"
 #endif
 
-#if !defined(OS_MAC)
+#if !BUILDFLAG(IS_MAC)
 #include "ui/aura/window.h"
 #else
 #include "ui/base/cocoa/defaults_utils.h"
 #endif
 
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
 #include "ui/views/linux_ui/linux_ui.h"
 #endif
 
-#if defined(OS_LINUX) || defined(OS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 #include "ui/gfx/font_render_params.h"
 #endif
 
@@ -170,11 +166,11 @@
 #if BUILDFLAG(ENABLE_PRINTING)
 #include "components/printing/browser/print_manager_utils.h"
 #include "printing/backend/print_backend.h"  // nogncheck
-#include "printing/mojom/print.mojom.h"
+#include "printing/mojom/print.mojom.h"      // nogncheck
 #include "shell/browser/printing/print_preview_message_handler.h"
 #include "shell/browser/printing/print_view_manager_electron.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "printing/backend/win_helper.h"
 #endif
 #endif
@@ -392,19 +388,19 @@ void OnCapturePageDone(gin_helper::Promise<gfx::Image> promise,
 }
 
 absl::optional<base::TimeDelta> GetCursorBlinkInterval() {
-#if defined(OS_MAC)
-  base::TimeDelta interval;
-  if (ui::TextInsertionCaretBlinkPeriod(&interval))
-    return interval;
-#elif defined(OS_LINUX)
+#if BUILDFLAG(IS_MAC)
+  absl::optional<base::TimeDelta> system_value(
+      ui::TextInsertionCaretBlinkPeriodFromDefaults());
+  if (system_value)
+    return *system_value;
+#elif BUILDFLAG(IS_LINUX)
   if (auto* linux_ui = views::LinuxUI::instance())
     return linux_ui->GetCursorBlinkInterval();
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
   const auto system_msec = ::GetCaretBlinkTime();
   if (system_msec != 0) {
-    return (system_msec == INFINITE)
-               ? base::TimeDelta()
-               : base::TimeDelta::FromMilliseconds(system_msec);
+    return (system_msec == INFINITE) ? base::TimeDelta()
+                                     : base::Milliseconds(system_msec);
   }
 #endif
   return absl::nullopt;
@@ -415,14 +411,14 @@ absl::optional<base::TimeDelta> GetCursorBlinkInterval() {
 // found on the network. We need to check this because Chromium does not do
 // sanity checking of device_name validity and so will crash on invalid names.
 bool IsDeviceNameValid(const std::u16string& device_name) {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   base::ScopedCFTypeRef<CFStringRef> new_printer_id(
       base::SysUTF16ToCFStringRef(device_name));
   PMPrinter new_printer = PMPrinterCreateFromPrinterID(new_printer_id.get());
   bool printer_exists = new_printer != nullptr;
   PMRelease(new_printer);
   return printer_exists;
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
   printing::ScopedPrinterHandle printer;
   return printer.OpenPrinterWithName(base::as_wcstr(device_name));
 #else
@@ -431,7 +427,7 @@ bool IsDeviceNameValid(const std::u16string& device_name) {
 }
 
 std::pair<std::string, std::u16string> GetDefaultPrinterAsync() {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Blocking is needed here because Windows printer drivers are oftentimes
   // not thread-safe and have to be accessed on the UI thread.
   base::ThreadRestrictions::ScopedAllowIO allow_io;
@@ -466,7 +462,7 @@ std::pair<std::string, std::u16string> GetDefaultPrinterAsync() {
 // chrome/browser/ui/webui/print_preview/local_printer_handler_default.cc:L36-L54
 scoped_refptr<base::TaskRunner> CreatePrinterHandlerTaskRunner() {
   // USER_VISIBLE because the result is displayed in the print preview dialog.
-#if !defined(OS_WIN)
+#if !BUILDFLAG(IS_WIN)
   static constexpr base::TaskTraits kTraits = {
       base::MayBlock(), base::TaskPriority::USER_VISIBLE};
 #endif
@@ -474,7 +470,7 @@ scoped_refptr<base::TaskRunner> CreatePrinterHandlerTaskRunner() {
 #if defined(USE_CUPS)
   // CUPS is thread safe.
   return base::ThreadPool::CreateTaskRunner(kTraits);
-#elif defined(OS_WIN)
+#elif BUILDFLAG(IS_WIN)
   // Windows drivers are likely not thread-safe and need to be accessed on the
   // UI thread.
   return content::GetUIThreadTaskRunner(
@@ -540,7 +536,7 @@ FileSystem CreateFileSystemStruct(content::WebContents* web_contents,
                                   const std::string& file_system_id,
                                   const std::string& file_system_path,
                                   const std::string& type) {
-  const GURL origin = web_contents->GetURL().GetOrigin();
+  const GURL origin = web_contents->GetURL().DeprecatedGetOriginAsURL();
   std::string file_system_name =
       storage::GetIsolatedFileSystemName(origin, file_system_id);
   std::string root_url = storage::GetIsolatedFileSystemRootURIString(
@@ -582,15 +578,17 @@ PrefService* GetPrefService(content::WebContents* web_contents) {
 std::map<std::string, std::string> GetAddedFileSystemPaths(
     content::WebContents* web_contents) {
   auto* pref_service = GetPrefService(web_contents);
-  const base::DictionaryValue* file_system_paths_value =
+  const base::Value* file_system_paths_value =
       pref_service->GetDictionary(prefs::kDevToolsFileSystemPaths);
   std::map<std::string, std::string> result;
   if (file_system_paths_value) {
-    base::DictionaryValue::Iterator it(*file_system_paths_value);
-    for (; !it.IsAtEnd(); it.Advance()) {
+    const base::DictionaryValue* file_system_paths_dict;
+    file_system_paths_value->GetAsDictionary(&file_system_paths_dict);
+
+    for (auto it : file_system_paths_dict->DictItems()) {
       std::string type =
-          it.value().is_string() ? it.value().GetString() : std::string();
-      result[it.key()] = type;
+          it.second.is_string() ? it.second.GetString() : std::string();
+      result[it.first] = type;
     }
   }
   return result;
@@ -600,6 +598,12 @@ bool IsDevToolsFileSystemAdded(content::WebContents* web_contents,
                                const std::string& file_system_path) {
   auto file_system_paths = GetAddedFileSystemPaths(web_contents);
   return file_system_paths.find(file_system_path) != file_system_paths.end();
+}
+
+void SetBackgroundColor(content::RenderWidgetHostView* rwhv, SkColor color) {
+  rwhv->SetBackgroundColor(color);
+  static_cast<content::RenderWidgetHostViewBase*>(rwhv)
+      ->SetContentBackgroundColor(color);
 }
 
 }  // namespace
@@ -763,8 +767,12 @@ WebContents::WebContents(v8::Isolate* isolate,
 #if BUILDFLAG(ENABLE_OSR)
     }
   } else if (IsOffScreen()) {
-    bool transparent = false;
-    options.Get(options::kTransparent, &transparent);
+    // webPreferences does not have a transparent option, so if the window needs
+    // to be transparent, that will be set at electron_api_browser_window.cc#L57
+    // and we then need to pull it back out and check it here.
+    std::string background_color;
+    options.GetHidden(options::kBackgroundColor, &background_color);
+    bool transparent = ParseCSSColor(background_color) == SK_ColorTRANSPARENT;
 
     content::WebContents::CreateParams params(session->browser_context());
     auto* view = new OffScreenWebContentsView(
@@ -823,7 +831,7 @@ void WebContents::InitWithSessionAndOptions(
   accept_languages.pop_back();
   prefs->accept_languages = accept_languages;
 
-#if defined(OS_LINUX) || defined(OS_WIN)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
   // Update font settings.
   static const gfx::FontRenderParams params(
       gfx::GetFontRenderParams(gfx::FontRenderParamsQuery(), nullptr));
@@ -986,8 +994,8 @@ void WebContents::Destroy() {
   if (Browser::Get()->is_shutting_down() || IsGuest()) {
     DeleteThisIfAlive();
   } else {
-    base::PostTask(FROM_HERE, {content::BrowserThread::UI},
-                   base::BindOnce(
+    content::GetUIThreadTaskRunner({})->PostTask(
+        FROM_HERE, base::BindOnce(
                        [](base::WeakPtr<WebContents> contents) {
                          if (contents)
                            contents->DeleteThisIfAlive();
@@ -1032,7 +1040,6 @@ void WebContents::WebContentsCreatedWithFullParams(
   tracker->body = params.body;
 
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
-  v8::Locker locker(isolate);
   v8::HandleScope handle_scope(isolate);
 
   gin_helper::Dictionary dict;
@@ -1064,7 +1071,6 @@ bool WebContents::IsWebContentsCreationOverridden(
 void WebContents::SetNextChildWebPreferences(
     const gin_helper::Dictionary preferences) {
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
-  v8::Locker locker(isolate);
   v8::HandleScope handle_scope(isolate);
   // Store these prefs for when Chrome calls WebContentsCreatedWithFullParams
   // with the new child contents.
@@ -1078,7 +1084,7 @@ content::WebContents* WebContents::CreateCustomWebContents(
     const GURL& opener_url,
     const std::string& frame_name,
     const GURL& target_url,
-    const content::StoragePartitionId& partition_id,
+    const content::StoragePartitionConfig& partition_config,
     content::SessionStorageNamespace* session_storage_namespace) {
   return nullptr;
 }
@@ -1096,7 +1102,6 @@ void WebContents::AddNewContents(
 
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
 
-  v8::Locker locker(isolate);
   v8::HandleScope handle_scope(isolate);
   auto api_web_contents =
       CreateAndTake(isolate, std::move(new_contents), Type::kBrowserWindow);
@@ -1210,7 +1215,7 @@ bool WebContents::HandleKeyboardEvent(
   }
 }
 
-#if !defined(OS_MAC)
+#if !BUILDFLAG(IS_MAC)
 // NOTE: The macOS version of this function is found in
 // electron_api_web_contents_mac.mm, as it requires calling into objective-C
 // code.
@@ -1241,6 +1246,9 @@ bool WebContents::PlatformHandleKeyboardEvent(
 content::KeyboardEventProcessingResult WebContents::PreHandleKeyboardEvent(
     content::WebContents* source,
     const content::NativeWebKeyboardEvent& event) {
+  if (exclusive_access_manager_->HandleUserKeyEvent(event))
+    return content::KeyboardEventProcessingResult::HANDLED;
+
   if (event.GetType() == blink::WebInputEvent::Type::kRawKeyDown ||
       event.GetType() == blink::WebInputEvent::Type::kKeyUp) {
     bool prevent_default = Emit("before-input-event", event);
@@ -1300,8 +1308,6 @@ void WebContents::EnterFullscreenModeForTab(
       base::BindRepeating(&WebContents::OnEnterFullscreenModeForTab,
                           base::Unretained(this), requesting_frame, options);
   permission_helper->RequestFullscreenPermission(callback);
-  exclusive_access_manager_->fullscreen_controller()->EnterFullscreenModeForTab(
-      requesting_frame, options.display_id);
 }
 
 void WebContents::OnEnterFullscreenModeForTab(
@@ -1317,6 +1323,9 @@ void WebContents::OnEnterFullscreenModeForTab(
     return;
   }
 
+  exclusive_access_manager_->fullscreen_controller()->EnterFullscreenModeForTab(
+      requesting_frame, options.display_id);
+
   SetHtmlApiFullscreen(true);
 
   if (native_fullscreen_) {
@@ -1330,6 +1339,11 @@ void WebContents::ExitFullscreenModeForTab(content::WebContents* source) {
   if (!owner_window_)
     return;
 
+  // This needs to be called before we exit fullscreen on the native window,
+  // or the controller will incorrectly think we weren't fullscreen and bail.
+  exclusive_access_manager_->fullscreen_controller()->ExitFullscreenModeForTab(
+      source);
+
   SetHtmlApiFullscreen(false);
 
   if (native_fullscreen_) {
@@ -1338,9 +1352,6 @@ void WebContents::ExitFullscreenModeForTab(content::WebContents* source) {
     // `chrome/browser/ui/exclusive_access/fullscreen_controller.cc`.
     source->GetRenderViewHost()->GetWidget()->SynchronizeVisualProperties();
   }
-
-  exclusive_access_manager_->fullscreen_controller()->ExitFullscreenModeForTab(
-      source);
 }
 
 void WebContents::RendererUnresponsive(
@@ -1356,9 +1367,9 @@ void WebContents::RendererResponsive(
   Emit("responsive");
 }
 
-bool WebContents::HandleContextMenu(content::RenderFrameHost* render_frame_host,
+bool WebContents::HandleContextMenu(content::RenderFrameHost& render_frame_host,
                                     const content::ContextMenuParams& params) {
-  Emit("context-menu", std::make_pair(params, render_frame_host));
+  Emit("context-menu", std::make_pair(params, &render_frame_host));
 
   return true;
 }
@@ -1378,7 +1389,6 @@ void WebContents::FindReply(content::WebContents* web_contents,
     return;
 
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
-  v8::Locker locker(isolate);
   v8::HandleScope handle_scope(isolate);
   gin_helper::Dictionary result = gin::Dictionary::CreateEmpty(isolate);
   result.Set("requestId", request_id);
@@ -1387,6 +1397,35 @@ void WebContents::FindReply(content::WebContents* web_contents,
   result.Set("activeMatchOrdinal", active_match_ordinal);
   result.Set("finalUpdate", final_update);  // Deprecate after 2.0
   Emit("found-in-page", result.GetHandle());
+}
+
+void WebContents::RequestExclusivePointerAccess(
+    content::WebContents* web_contents,
+    bool user_gesture,
+    bool last_unlocked_by_target,
+    bool allowed) {
+  if (allowed) {
+    exclusive_access_manager_->mouse_lock_controller()->RequestToLockMouse(
+        web_contents, user_gesture, last_unlocked_by_target);
+  } else {
+    web_contents->GotResponseToLockMouseRequest(
+        blink::mojom::PointerLockResult::kPermissionDenied);
+  }
+}
+
+void WebContents::RequestToLockMouse(content::WebContents* web_contents,
+                                     bool user_gesture,
+                                     bool last_unlocked_by_target) {
+  auto* permission_helper =
+      WebContentsPermissionHelper::FromWebContents(web_contents);
+  permission_helper->RequestPointerLockPermission(
+      user_gesture, last_unlocked_by_target,
+      base::BindOnce(&WebContents::RequestExclusivePointerAccess,
+                     base::Unretained(this)));
+}
+
+void WebContents::LostMouseLock() {
+  exclusive_access_manager_->mouse_lock_controller()->LostMouseLock();
 }
 
 void WebContents::RequestKeyboardLock(content::WebContents* web_contents,
@@ -1421,14 +1460,6 @@ void WebContents::RequestMediaAccessPermission(
   permission_helper->RequestMediaAccessPermission(request, std::move(callback));
 }
 
-void WebContents::RequestToLockMouse(content::WebContents* web_contents,
-                                     bool user_gesture,
-                                     bool last_unlocked_by_target) {
-  auto* permission_helper =
-      WebContentsPermissionHelper::FromWebContents(web_contents);
-  permission_helper->RequestPointerLockPermission(user_gesture);
-}
-
 content::JavaScriptDialogManager* WebContents::GetJavaScriptDialogManager(
     content::WebContents* source) {
   if (!dialog_manager_)
@@ -1456,11 +1487,13 @@ void WebContents::HandleNewRenderFrame(
   // Set the background color of RenderWidgetHostView.
   auto* web_preferences = WebContentsPreferences::From(web_contents());
   if (web_preferences) {
+    absl::optional<SkColor> maybe_color = web_preferences->GetBackgroundColor();
+    web_contents()->SetPageBaseBackgroundColor(maybe_color);
+
     bool guest = IsGuest() || type_ == Type::kBrowserView;
-    absl::optional<SkColor> color =
-        guest ? SK_ColorTRANSPARENT : web_preferences->GetBackgroundColor();
-    web_contents()->SetPageBaseBackgroundColor(color);
-    rwhv->SetBackgroundColor(color.value_or(SK_ColorWHITE));
+    SkColor color =
+        maybe_color.value_or(guest ? SK_ColorTRANSPARENT : SK_ColorWHITE);
+    SetBackgroundColor(rwhv, color);
   }
 
   if (!background_throttling_)
@@ -1473,7 +1506,16 @@ void WebContents::HandleNewRenderFrame(
 
   auto* web_frame = WebFrameMain::FromRenderFrameHost(render_frame_host);
   if (web_frame)
-    web_frame->Connect();
+    web_frame->MaybeSetupMojoConnection();
+}
+
+void WebContents::OnBackgroundColorChanged() {
+  absl::optional<SkColor> color = web_contents()->GetBackgroundColor();
+  if (color.has_value()) {
+    auto* const view = web_contents()->GetRenderWidgetHostView();
+    static_cast<content::RenderWidgetHostViewBase*>(view)
+        ->SetContentBackgroundColor(color.value());
+  }
 }
 
 void WebContents::RenderFrameCreated(
@@ -1565,7 +1607,8 @@ void WebContents::RenderViewDeleted(content::RenderViewHost* render_view_host) {
   }
 }
 
-void WebContents::RenderProcessGone(base::TerminationStatus status) {
+void WebContents::PrimaryMainFrameRenderProcessGone(
+    base::TerminationStatus status) {
   auto weak_this = GetWeakPtr();
   Emit("crashed", status == base::TERMINATION_STATUS_PROCESS_WAS_KILLED);
 
@@ -1614,6 +1657,16 @@ void WebContents::DidChangeThemeColor() {
 
 void WebContents::DidAcquireFullscreen(content::RenderFrameHost* rfh) {
   set_fullscreen_frame(rfh);
+}
+
+void WebContents::OnWebContentsFocused(
+    content::RenderWidgetHost* render_widget_host) {
+  Emit("focus");
+}
+
+void WebContents::OnWebContentsLostFocus(
+    content::RenderWidgetHost* render_widget_host) {
+  Emit("blur");
 }
 
 void WebContents::DOMContentLoaded(
@@ -1698,7 +1751,7 @@ void WebContents::Message(bool internal,
   // webContents.emit('-ipc-message', new Event(), internal, channel,
   // arguments);
   EmitWithSender("-ipc-message", render_frame_host,
-                 electron::mojom::ElectronBrowser::InvokeCallback(), internal,
+                 electron::mojom::ElectronApiIPC::InvokeCallback(), internal,
                  channel, std::move(arguments));
 }
 
@@ -1706,7 +1759,7 @@ void WebContents::Invoke(
     bool internal,
     const std::string& channel,
     blink::CloneableMessage arguments,
-    electron::mojom::ElectronBrowser::InvokeCallback callback,
+    electron::mojom::ElectronApiIPC::InvokeCallback callback,
     content::RenderFrameHost* render_frame_host) {
   TRACE_EVENT1("electron", "WebContents::Invoke", "channel", channel);
   // webContents.emit('-ipc-invoke', new Event(), internal, channel, arguments);
@@ -1732,7 +1785,7 @@ void WebContents::ReceivePostMessage(
   v8::Local<v8::Value> message_value =
       electron::DeserializeV8Value(isolate, message);
   EmitWithSender("-ipc-ports", render_frame_host,
-                 electron::mojom::ElectronBrowser::InvokeCallback(), false,
+                 electron::mojom::ElectronApiIPC::InvokeCallback(), false,
                  channel, message_value, std::move(wrapped_ports));
 }
 
@@ -1740,7 +1793,7 @@ void WebContents::MessageSync(
     bool internal,
     const std::string& channel,
     blink::CloneableMessage arguments,
-    electron::mojom::ElectronBrowser::MessageSyncCallback callback,
+    electron::mojom::ElectronApiIPC::MessageSyncCallback callback,
     content::RenderFrameHost* render_frame_host) {
   TRACE_EVENT1("electron", "WebContents::MessageSync", "channel", channel);
   // webContents.emit('-ipc-message-sync', new Event(sender, message), internal,
@@ -1778,7 +1831,7 @@ void WebContents::MessageHost(const std::string& channel,
   TRACE_EVENT1("electron", "WebContents::MessageHost", "channel", channel);
   // webContents.emit('ipc-message-host', new Event(), channel, args);
   EmitWithSender("ipc-message-host", render_frame_host,
-                 electron::mojom::ElectronBrowser::InvokeCallback(), channel,
+                 electron::mojom::ElectronApiIPC::InvokeCallback(), channel,
                  std::move(arguments));
 }
 
@@ -1803,7 +1856,7 @@ void WebContents::ReadyToCommitNavigation(
   // Don't focus content in an inactive window.
   if (!owner_window())
     return;
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   if (!owner_window()->IsActive())
     return;
 #else
@@ -1934,7 +1987,6 @@ void WebContents::DevToolsFocused() {
 
 void WebContents::DevToolsOpened() {
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
-  v8::Locker locker(isolate);
   v8::HandleScope handle_scope(isolate);
   DCHECK(inspectable_web_contents_);
   DCHECK(inspectable_web_contents_->GetDevToolsWebContents());
@@ -1958,7 +2010,6 @@ void WebContents::DevToolsOpened() {
 
 void WebContents::DevToolsClosed() {
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
-  v8::Locker locker(isolate);
   v8::HandleScope handle_scope(isolate);
   devtools_web_contents_.Reset();
 
@@ -2180,7 +2231,7 @@ bool WebContents::IsLoading() const {
 }
 
 bool WebContents::IsLoadingMainFrame() const {
-  return web_contents()->IsLoadingToDifferentDocument();
+  return web_contents()->ShouldShowLoadingUI();
 }
 
 bool WebContents::IsWaitingForResponse() const {
@@ -2277,8 +2328,8 @@ std::string WebContents::GetMediaSourceID(
       content::DesktopStreamsRegistry::GetInstance()->RegisterStream(
           request_frame_host->GetProcess()->GetID(),
           request_frame_host->GetRoutingID(),
-          url::Origin::Create(
-              request_frame_host->GetLastCommittedURL().GetOrigin()),
+          url::Origin::Create(request_frame_host->GetLastCommittedURL()
+                                  .DeprecatedGetOriginAsURL()),
           media_id, "", content::kRegistryStreamTypeTab);
 
   return id;
@@ -2300,7 +2351,7 @@ void WebContents::ForcefullyCrashRenderer() {
 
   content::RenderProcessHost* rph = rwh->GetProcess();
   if (rph) {
-#if defined(OS_LINUX) || defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
     // A generic |CrashDumpHungChildProcess()| is not implemented for Linux.
     // Instead we send an explicit IPC to crash on the renderer's IO thread.
     rph->ForceCrash();
@@ -2329,6 +2380,11 @@ v8::Local<v8::Promise> WebContents::SavePage(
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
   gin_helper::Promise<void> promise(isolate);
   v8::Local<v8::Promise> handle = promise.GetHandle();
+
+  if (!full_file_path.IsAbsolute()) {
+    promise.RejectWithErrorMessage("Path must be absolute");
+    return handle;
+  }
 
   auto* handler = new SavePageHandler(web_contents(), std::move(promise));
   handler->Handle(full_file_path, save_type);
@@ -2531,7 +2587,7 @@ bool WebContents::IsCurrentlyAudible() {
 
 #if BUILDFLAG(ENABLE_PRINTING)
 void WebContents::OnGetDefaultPrinter(
-    base::Value print_settings,
+    base::Value::Dict print_settings,
     printing::CompletionCallback print_callback,
     std::u16string device_name,
     bool silent,
@@ -2561,7 +2617,7 @@ void WebContents::OnGetDefaultPrinter(
     return;
   }
 
-  print_settings.SetStringKey(printing::kSettingDeviceName, printer_name);
+  print_settings.Set(printing::kSettingDeviceName, printer_name);
 
   auto* print_view_manager =
       PrintViewManagerElectron::FromWebContents(web_contents());
@@ -2580,7 +2636,7 @@ void WebContents::OnGetDefaultPrinter(
 void WebContents::Print(gin::Arguments* args) {
   gin_helper::Dictionary options =
       gin::Dictionary::CreateEmpty(args->isolate());
-  base::Value settings(base::Value::Type::DICTIONARY);
+  base::Value::Dict settings;
 
   if (args->Length() >= 1 && !args->GetNext(&options)) {
     gin_helper::ErrorThrower(args->isolate())
@@ -2601,8 +2657,7 @@ void WebContents::Print(gin::Arguments* args) {
 
   bool print_background = false;
   options.Get("printBackground", &print_background);
-  settings.SetBoolKey(printing::kSettingShouldPrintBackgrounds,
-                      print_background);
+  settings.Set(printing::kSettingShouldPrintBackgrounds, print_background);
 
   // Set custom margin settings
   gin_helper::Dictionary margins =
@@ -2611,28 +2666,26 @@ void WebContents::Print(gin::Arguments* args) {
     printing::mojom::MarginType margin_type =
         printing::mojom::MarginType::kDefaultMargins;
     margins.Get("marginType", &margin_type);
-    settings.SetIntKey(printing::kSettingMarginsType,
-                       static_cast<int>(margin_type));
+    settings.Set(printing::kSettingMarginsType, static_cast<int>(margin_type));
 
     if (margin_type == printing::mojom::MarginType::kCustomMargins) {
-      base::Value custom_margins(base::Value::Type::DICTIONARY);
+      base::Value::Dict custom_margins;
       int top = 0;
       margins.Get("top", &top);
-      custom_margins.SetIntKey(printing::kSettingMarginTop, top);
+      custom_margins.Set(printing::kSettingMarginTop, top);
       int bottom = 0;
       margins.Get("bottom", &bottom);
-      custom_margins.SetIntKey(printing::kSettingMarginBottom, bottom);
+      custom_margins.Set(printing::kSettingMarginBottom, bottom);
       int left = 0;
       margins.Get("left", &left);
-      custom_margins.SetIntKey(printing::kSettingMarginLeft, left);
+      custom_margins.Set(printing::kSettingMarginLeft, left);
       int right = 0;
       margins.Get("right", &right);
-      custom_margins.SetIntKey(printing::kSettingMarginRight, right);
-      settings.SetPath(printing::kSettingMarginsCustom,
-                       std::move(custom_margins));
+      custom_margins.Set(printing::kSettingMarginRight, right);
+      settings.Set(printing::kSettingMarginsCustom, std::move(custom_margins));
     }
   } else {
-    settings.SetIntKey(
+    settings.Set(
         printing::kSettingMarginsType,
         static_cast<int>(printing::mojom::MarginType::kDefaultMargins));
   }
@@ -2642,12 +2695,12 @@ void WebContents::Print(gin::Arguments* args) {
   options.Get("color", &print_color);
   auto const color_model = print_color ? printing::mojom::ColorModel::kColor
                                        : printing::mojom::ColorModel::kGray;
-  settings.SetIntKey(printing::kSettingColor, static_cast<int>(color_model));
+  settings.Set(printing::kSettingColor, static_cast<int>(color_model));
 
   // Is the orientation landscape or portrait.
   bool landscape = false;
   options.Get("landscape", &landscape);
-  settings.SetBoolKey(printing::kSettingLandscape, landscape);
+  settings.Set(printing::kSettingLandscape, landscape);
 
   // We set the default to the system's default printer and only update
   // if at the Chromium level if the user overrides.
@@ -2662,21 +2715,21 @@ void WebContents::Print(gin::Arguments* args) {
 
   int scale_factor = 100;
   options.Get("scaleFactor", &scale_factor);
-  settings.SetIntKey(printing::kSettingScaleFactor, scale_factor);
+  settings.Set(printing::kSettingScaleFactor, scale_factor);
 
   int pages_per_sheet = 1;
   options.Get("pagesPerSheet", &pages_per_sheet);
-  settings.SetIntKey(printing::kSettingPagesPerSheet, pages_per_sheet);
+  settings.Set(printing::kSettingPagesPerSheet, pages_per_sheet);
 
   // True if the user wants to print with collate.
   bool collate = true;
   options.Get("collate", &collate);
-  settings.SetBoolKey(printing::kSettingCollate, collate);
+  settings.Set(printing::kSettingCollate, collate);
 
   // The number of individual copies to print
   int copies = 1;
   options.Get("copies", &copies);
-  settings.SetIntKey(printing::kSettingCopies, copies);
+  settings.Set(printing::kSettingCopies, copies);
 
   // Strings to be printed as headers and footers if requested by the user.
   std::string header;
@@ -2685,53 +2738,52 @@ void WebContents::Print(gin::Arguments* args) {
   options.Get("footer", &footer);
 
   if (!(header.empty() && footer.empty())) {
-    settings.SetBoolKey(printing::kSettingHeaderFooterEnabled, true);
+    settings.Set(printing::kSettingHeaderFooterEnabled, true);
 
-    settings.SetStringKey(printing::kSettingHeaderFooterTitle, header);
-    settings.SetStringKey(printing::kSettingHeaderFooterURL, footer);
+    settings.Set(printing::kSettingHeaderFooterTitle, header);
+    settings.Set(printing::kSettingHeaderFooterURL, footer);
   } else {
-    settings.SetBoolKey(printing::kSettingHeaderFooterEnabled, false);
+    settings.Set(printing::kSettingHeaderFooterEnabled, false);
   }
 
   // We don't want to allow the user to enable these settings
   // but we need to set them or a CHECK is hit.
-  settings.SetIntKey(printing::kSettingPrinterType,
-                     static_cast<int>(printing::mojom::PrinterType::kLocal));
-  settings.SetBoolKey(printing::kSettingShouldPrintSelectionOnly, false);
-  settings.SetBoolKey(printing::kSettingRasterizePdf, false);
+  settings.Set(printing::kSettingPrinterType,
+               static_cast<int>(printing::mojom::PrinterType::kLocal));
+  settings.Set(printing::kSettingShouldPrintSelectionOnly, false);
+  settings.Set(printing::kSettingRasterizePdf, false);
 
   // Set custom page ranges to print
   std::vector<gin_helper::Dictionary> page_ranges;
   if (options.Get("pageRanges", &page_ranges)) {
-    base::Value page_range_list(base::Value::Type::LIST);
+    base::Value::List page_range_list;
     for (auto& range : page_ranges) {
       int from, to;
       if (range.Get("from", &from) && range.Get("to", &to)) {
-        base::Value range(base::Value::Type::DICTIONARY);
+        base::Value::Dict range;
         // Chromium uses 1-based page ranges, so increment each by 1.
-        range.SetIntKey(printing::kSettingPageRangeFrom, from + 1);
-        range.SetIntKey(printing::kSettingPageRangeTo, to + 1);
+        range.Set(printing::kSettingPageRangeFrom, from + 1);
+        range.Set(printing::kSettingPageRangeTo, to + 1);
         page_range_list.Append(std::move(range));
       } else {
         continue;
       }
     }
-    if (!page_range_list.GetList().empty())
-      settings.SetPath(printing::kSettingPageRange, std::move(page_range_list));
+    if (!page_range_list.empty())
+      settings.Set(printing::kSettingPageRange, std::move(page_range_list));
   }
 
   // Duplex type user wants to use.
   printing::mojom::DuplexMode duplex_mode =
       printing::mojom::DuplexMode::kSimplex;
   options.Get("duplexMode", &duplex_mode);
-  settings.SetIntKey(printing::kSettingDuplexMode,
-                     static_cast<int>(duplex_mode));
+  settings.Set(printing::kSettingDuplexMode, static_cast<int>(duplex_mode));
 
   // We've already done necessary parameter sanitization at the
   // JS level, so we can simply pass this through.
   base::Value media_size(base::Value::Type::DICTIONARY);
   if (options.Get("mediaSize", &media_size))
-    settings.SetKey(printing::kSettingMediaSize, std::move(media_size));
+    settings.Set(printing::kSettingMediaSize, std::move(media_size));
 
   // Set custom dots per inch (dpi)
   gin_helper::Dictionary dpi_settings;
@@ -2739,13 +2791,13 @@ void WebContents::Print(gin::Arguments* args) {
   if (options.Get("dpi", &dpi_settings)) {
     int horizontal = 72;
     dpi_settings.Get("horizontal", &horizontal);
-    settings.SetIntKey(printing::kSettingDpiHorizontal, horizontal);
+    settings.Set(printing::kSettingDpiHorizontal, horizontal);
     int vertical = 72;
     dpi_settings.Get("vertical", &vertical);
-    settings.SetIntKey(printing::kSettingDpiVertical, vertical);
+    settings.Set(printing::kSettingDpiVertical, vertical);
   } else {
-    settings.SetIntKey(printing::kSettingDpiHorizontal, dpi);
-    settings.SetIntKey(printing::kSettingDpiVertical, dpi);
+    settings.Set(printing::kSettingDpiHorizontal, dpi);
+    settings.Set(printing::kSettingDpiVertical, dpi);
   }
 
   print_task_runner_->PostTaskAndReplyWithResult(
@@ -2855,7 +2907,7 @@ void WebContents::StopFindInPage(content::StopFindAction action) {
 }
 
 void WebContents::ShowDefinitionForSelection() {
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   auto* const view = web_contents()->GetRenderWidgetHostView();
   if (view)
     view->ShowDefinitionForSelection();
@@ -2871,14 +2923,14 @@ void WebContents::CopyImageAt(int x, int y) {
 void WebContents::Focus() {
   // Focusing on WebContents does not automatically focus the window on macOS
   // and Linux, do it manually to match the behavior on Windows.
-#if defined(OS_MAC) || defined(OS_LINUX)
+#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   if (owner_window())
     owner_window()->Focus(true);
 #endif
   web_contents()->Focus();
 }
 
-#if !defined(OS_MAC)
+#if !BUILDFLAG(IS_MAC)
 bool WebContents::IsFocused() const {
   auto* view = web_contents()->GetRenderWidgetHostView();
   if (!view)
@@ -3025,7 +3077,7 @@ v8::Local<v8::Promise> WebContents::CapturePage(gin::Arguments* args) {
     return handle;
   }
 
-#if !defined(OS_MAC)
+#if !BUILDFLAG(IS_MAC)
   // If the view's renderer is suspended this may fail on Windows/Linux -
   // bail if so. See CopyFromSurface in
   // content/public/browser/render_widget_host_view.h.
@@ -3035,7 +3087,7 @@ v8::Local<v8::Promise> WebContents::CapturePage(gin::Arguments* args) {
     promise.Resolve(gfx::Image());
     return handle;
   }
-#endif  // defined(OS_MAC)
+#endif  // BUILDFLAG(IS_MAC)
 
   // Capture full page if user doesn't specify a |rect|.
   const gfx::Size view_size =
@@ -3069,8 +3121,9 @@ void WebContents::IncrementCapturerCount(gin::Arguments* args) {
   // get stayAwake arguments if they exist
   args->GetNext(&stay_awake);
 
-  ignore_result(
-      web_contents()->IncrementCapturerCount(size, stay_hidden, stay_awake));
+  std::ignore = web_contents()
+                    ->IncrementCapturerCount(size, stay_hidden, stay_awake)
+                    .Release();
 }
 
 void WebContents::DecrementCapturerCount(gin::Arguments* args) {
@@ -3212,7 +3265,8 @@ void WebContents::SetTemporaryZoomLevel(double level) {
 }
 
 void WebContents::DoGetZoomLevel(
-    electron::mojom::ElectronBrowser::DoGetZoomLevelCallback callback) {
+    electron::mojom::ElectronWebContentsUtility::DoGetZoomLevelCallback
+        callback) {
   std::move(callback).Run(GetZoomLevel());
 }
 
@@ -3392,37 +3446,127 @@ v8::Local<v8::Promise> WebContents::TakeHeapSnapshot(
 void WebContents::GrantDevicePermission(
     const url::Origin& origin,
     const base::Value* device,
-    content::PermissionType permissionType,
+    blink::PermissionType permission_type,
     content::RenderFrameHost* render_frame_host) {
-  granted_devices_[render_frame_host->GetFrameTreeNodeId()][permissionType]
+  granted_devices_[render_frame_host->GetFrameTreeNodeId()][permission_type]
                   [origin]
                       .push_back(
                           std::make_unique<base::Value>(device->Clone()));
 }
 
-std::vector<base::Value> WebContents::GetGrantedDevices(
+void WebContents::RevokeDevicePermission(
     const url::Origin& origin,
-    content::PermissionType permissionType,
+    const base::Value* device,
+    blink::PermissionType permission_type,
     content::RenderFrameHost* render_frame_host) {
   const auto& devices_for_frame_host_it =
       granted_devices_.find(render_frame_host->GetFrameTreeNodeId());
   if (devices_for_frame_host_it == granted_devices_.end())
-    return {};
+    return;
 
   const auto& current_devices_it =
-      devices_for_frame_host_it->second.find(permissionType);
+      devices_for_frame_host_it->second.find(permission_type);
   if (current_devices_it == devices_for_frame_host_it->second.end())
-    return {};
+    return;
 
   const auto& origin_devices_it = current_devices_it->second.find(origin);
   if (origin_devices_it == current_devices_it->second.end())
-    return {};
+    return;
 
-  std::vector<base::Value> results;
-  for (const auto& object : origin_devices_it->second)
-    results.push_back(object->Clone());
+  for (auto it = origin_devices_it->second.begin();
+       it != origin_devices_it->second.end();) {
+    if (DoesDeviceMatch(device, it->get(), permission_type)) {
+      it = origin_devices_it->second.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
 
-  return results;
+bool WebContents::DoesDeviceMatch(const base::Value* device,
+                                  const base::Value* device_to_compare,
+                                  blink::PermissionType permission_type) {
+  if (permission_type ==
+      static_cast<blink::PermissionType>(
+          WebContentsPermissionHelper::PermissionType::HID)) {
+    if (device->GetDict().FindInt(kHidVendorIdKey) !=
+            device_to_compare->GetDict().FindInt(kHidVendorIdKey) ||
+        device->GetDict().FindInt(kHidProductIdKey) !=
+            device_to_compare->GetDict().FindInt(kHidProductIdKey)) {
+      return false;
+    }
+
+    const auto* serial_number =
+        device_to_compare->GetDict().FindString(kHidSerialNumberKey);
+    const auto* device_serial_number =
+        device->GetDict().FindString(kHidSerialNumberKey);
+
+    if (serial_number && device_serial_number &&
+        *device_serial_number == *serial_number)
+      return true;
+  } else if (permission_type ==
+             static_cast<blink::PermissionType>(
+                 WebContentsPermissionHelper::PermissionType::SERIAL)) {
+#if BUILDFLAG(IS_WIN)
+    const auto* instance_id =
+        device->GetDict().FindString(kDeviceInstanceIdKey);
+    const auto* port_instance_id =
+        device_to_compare->GetDict().FindString(kDeviceInstanceIdKey);
+    if (instance_id && port_instance_id && *instance_id == *port_instance_id)
+      return true;
+#else
+    const auto* serial_number = device->GetDict().FindString(kSerialNumberKey);
+    const auto* port_serial_number =
+        device_to_compare->GetDict().FindString(kSerialNumberKey);
+    if (device->GetDict().FindInt(kVendorIdKey) !=
+            device_to_compare->GetDict().FindInt(kVendorIdKey) ||
+        device->GetDict().FindInt(kProductIdKey) !=
+            device_to_compare->GetDict().FindInt(kProductIdKey) ||
+        (serial_number && port_serial_number &&
+         *port_serial_number != *serial_number)) {
+      return false;
+    }
+
+#if BUILDFLAG(IS_MAC)
+    const auto* usb_driver_key = device->GetDict().FindString(kUsbDriverKey);
+    const auto* port_usb_driver_key =
+        device_to_compare->GetDict().FindString(kUsbDriverKey);
+    if (usb_driver_key && port_usb_driver_key &&
+        *usb_driver_key != *port_usb_driver_key) {
+      return false;
+    }
+#endif  // BUILDFLAG(IS_MAC)
+    return true;
+#endif  // BUILDFLAG(IS_WIN)
+  }
+  return false;
+}
+
+bool WebContents::CheckDevicePermission(
+    const url::Origin& origin,
+    const base::Value* device,
+    blink::PermissionType permission_type,
+    content::RenderFrameHost* render_frame_host) {
+  const auto& devices_for_frame_host_it =
+      granted_devices_.find(render_frame_host->GetFrameTreeNodeId());
+  if (devices_for_frame_host_it == granted_devices_.end())
+    return false;
+
+  const auto& current_devices_it =
+      devices_for_frame_host_it->second.find(permission_type);
+  if (current_devices_it == devices_for_frame_host_it->second.end())
+    return false;
+
+  const auto& origin_devices_it = current_devices_it->second.find(origin);
+  if (origin_devices_it == current_devices_it->second.end())
+    return false;
+
+  for (const auto& device_to_compare : origin_devices_it->second) {
+    if (DoesDeviceMatch(device, device_to_compare.get(), permission_type))
+      return true;
+  }
+
+  return false;
 }
 
 void WebContents::UpdatePreferredSize(content::WebContents* web_contents,
@@ -3457,16 +3601,12 @@ void WebContents::EnumerateDirectory(
 
 bool WebContents::IsFullscreenForTabOrPending(
     const content::WebContents* source) {
-  return html_fullscreen_;
-}
+  bool transition_fs = owner_window()
+                           ? owner_window()->fullscreen_transition_state() !=
+                                 NativeWindow::FullScreenTransitionState::NONE
+                           : false;
 
-blink::SecurityStyle WebContents::GetSecurityStyle(
-    content::WebContents* web_contents,
-    content::SecurityStyleExplanations* security_style_explanations) {
-  auto state = security_state::GetVisibleSecurityState(web_contents);
-  auto security_level = security_state::GetSecurityLevel(*state, false);
-  return security_state::GetSecurityStyle(security_level, *state,
-                                          security_style_explanations);
+  return html_fullscreen_ || transition_fs;
 }
 
 bool WebContents::TakeFocus(content::WebContents* source, bool reverse) {
@@ -3482,12 +3622,10 @@ bool WebContents::TakeFocus(content::WebContents* source, bool reverse) {
 }
 
 content::PictureInPictureResult WebContents::EnterPictureInPicture(
-    content::WebContents* web_contents,
-    const viz::SurfaceId& surface_id,
-    const gfx::Size& natural_size) {
+    content::WebContents* web_contents) {
 #if BUILDFLAG(ENABLE_PICTURE_IN_PICTURE)
-  return PictureInPictureWindowManager::GetInstance()->EnterPictureInPicture(
-      web_contents, surface_id, natural_size);
+  return PictureInPictureWindowManager::GetInstance()
+      ->EnterVideoPictureInPicture(web_contents);
 #else
   return content::PictureInPictureResult::kNotSupported;
 #endif
@@ -3601,8 +3739,7 @@ void WebContents::DevToolsAddFileSystem(
 
   auto* pref_service = GetPrefService(GetDevToolsWebContents());
   DictionaryPrefUpdate update(pref_service, prefs::kDevToolsFileSystemPaths);
-  update.Get()->SetWithoutPathExpansion(path.AsUTF8Unsafe(),
-                                        std::make_unique<base::Value>(type));
+  update.Get()->SetKey(path.AsUTF8Unsafe(), base::Value(type));
   inspectable_web_contents_->CallClientFunction(
       "DevToolsAPI.fileSystemAdded", nullptr, file_system_value.get(), nullptr);
 }
@@ -3640,7 +3777,8 @@ void WebContents::DevToolsIndexPath(
   std::unique_ptr<base::Value> parsed_excluded_folders =
       base::JSONReader::ReadDeprecated(excluded_folders_message);
   if (parsed_excluded_folders && parsed_excluded_folders->is_list()) {
-    for (const base::Value& folder_path : parsed_excluded_folders->GetList()) {
+    for (const base::Value& folder_path :
+         parsed_excluded_folders->GetListDeprecated()) {
       if (folder_path.is_string())
         excluded_folders.push_back(folder_path.GetString());
     }
@@ -3707,13 +3845,13 @@ void WebContents::ColorPickedInEyeDropper(int r, int g, int b, int a) {
       "DevToolsAPI.eyeDropperPickedColor", &color, nullptr, nullptr);
 }
 
-#if defined(TOOLKIT_VIEWS) && !defined(OS_MAC)
+#if defined(TOOLKIT_VIEWS) && !BUILDFLAG(IS_MAC)
 ui::ImageModel WebContents::GetDevToolsWindowIcon() {
   return owner_window() ? owner_window()->GetWindowAppIcon() : ui::ImageModel{};
 }
 #endif
 
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
 void WebContents::GetDevToolsWindowWMClass(std::string* name,
                                            std::string* class_name) {
   *class_name = Browser::Get()->GetName();
@@ -3790,9 +3928,8 @@ void WebContents::SetHtmlApiFullscreen(bool enter_fullscreen) {
           ? !web_preferences->ShouldDisableHtmlFullscreenWindowResize()
           : true;
 
-  if (html_fullscreenable) {
+  if (html_fullscreenable)
     owner_window_->SetFullScreen(enter_fullscreen);
-  }
 
   UpdateHtmlApiFullscreen(enter_fullscreen);
   native_fullscreen_ = false;
@@ -4064,7 +4201,7 @@ gin::Handle<WebContents> WebContents::CreateFromWebPreferences(
       // only set rwhv background color if a color exists
       auto* rwhv = web_contents->web_contents()->GetRenderWidgetHostView();
       if (rwhv && color.has_value())
-        rwhv->SetBackgroundColor(color.value());
+        SetBackgroundColor(rwhv, color.value());
     }
   } else {
     // Create one if not.

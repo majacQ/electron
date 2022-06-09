@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_API_ELECTRON_API_SESSION_H_
-#define SHELL_BROWSER_API_ELECTRON_API_SESSION_H_
+#ifndef ELECTRON_SHELL_BROWSER_API_ELECTRON_API_SESSION_H_
+#define ELECTRON_SHELL_BROWSER_API_ELECTRON_API_SESSION_H_
 
 #include <string>
 #include <vector>
@@ -127,6 +127,8 @@ class Session : public gin::Wrappable<Session>,
   void Preconnect(const gin_helper::Dictionary& options, gin::Arguments* args);
   v8::Local<v8::Promise> CloseAllConnections();
   v8::Local<v8::Value> GetPath(v8::Isolate* isolate);
+  void SetCodeCachePath(gin::Arguments* args);
+  v8::Local<v8::Promise> ClearCodeCaches(const gin_helper::Dictionary& options);
 #if BUILDFLAG(ENABLE_BUILTIN_SPELLCHECKER)
   base::Value GetSpellCheckerLanguages();
   void SetSpellCheckerLanguages(gin_helper::ErrorThrower thrower,
@@ -197,4 +199,4 @@ class Session : public gin::Wrappable<Session>,
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_API_ELECTRON_API_SESSION_H_
+#endif  // ELECTRON_SHELL_BROWSER_API_ELECTRON_API_SESSION_H_

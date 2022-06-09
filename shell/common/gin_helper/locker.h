@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE.chromium file.
 
-#ifndef SHELL_COMMON_GIN_HELPER_LOCKER_H_
-#define SHELL_COMMON_GIN_HELPER_LOCKER_H_
+#ifndef ELECTRON_SHELL_COMMON_GIN_HELPER_LOCKER_H_
+#define ELECTRON_SHELL_COMMON_GIN_HELPER_LOCKER_H_
 
 #include <memory>
 
@@ -23,15 +23,19 @@ class Locker {
 
   // Returns whether current process is browser process, currently we detect it
   // by checking whether current has used V8 Lock, but it might be a bad idea.
-  static inline bool IsBrowserProcess() { return v8::Locker::IsActive(); }
+  static inline bool IsBrowserProcess() { return g_is_browser_process; }
+
+  static void SetIsBrowserProcess(bool is_browser_process);
 
  private:
   void* operator new(size_t size);
   void operator delete(void*, size_t);
 
   std::unique_ptr<v8::Locker> locker_;
+
+  static bool g_is_browser_process;
 };
 
 }  // namespace gin_helper
 
-#endif  // SHELL_COMMON_GIN_HELPER_LOCKER_H_
+#endif  // ELECTRON_SHELL_COMMON_GIN_HELPER_LOCKER_H_

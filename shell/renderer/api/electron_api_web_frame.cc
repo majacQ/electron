@@ -34,7 +34,7 @@
 #include "shell/renderer/api/electron_api_context_bridge.h"
 #include "shell/renderer/api/electron_api_spell_check_client.h"
 #include "shell/renderer/renderer_client_base.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "third_party/blink/public/common/web_cache/web_cache_resource_type_stats.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
@@ -79,17 +79,17 @@ struct Converter<blink::WebLocalFrame::ScriptExecutionType> {
 };
 
 template <>
-struct Converter<blink::WebDocument::CSSOrigin> {
+struct Converter<blink::WebCssOrigin> {
   static bool FromV8(v8::Isolate* isolate,
                      v8::Local<v8::Value> val,
-                     blink::WebDocument::CSSOrigin* out) {
+                     blink::WebCssOrigin* out) {
     std::string css_origin;
     if (!ConvertFromV8(isolate, val, &css_origin))
       return false;
     if (css_origin == "user") {
-      *out = blink::WebDocument::CSSOrigin::kUserOrigin;
+      *out = blink::WebCssOrigin::kUser;
     } else if (css_origin == "author") {
-      *out = blink::WebDocument::CSSOrigin::kAuthorOrigin;
+      *out = blink::WebCssOrigin::kAuthor;
     } else {
       return false;
     }
@@ -102,7 +102,7 @@ struct Converter<blink::WebDocument::CSSOrigin> {
 namespace electron {
 
 content::RenderFrame* GetRenderFrame(v8::Local<v8::Object> value) {
-  v8::Local<v8::Context> context = value->CreationContext();
+  v8::Local<v8::Context> context = value->GetCreationContextChecked();
   if (context.IsEmpty())
     return nullptr;
   blink::WebLocalFrame* frame = blink::WebLocalFrame::FrameForContext(context);
@@ -161,9 +161,9 @@ class ScriptExecutionCallback : public blink::WebScriptExecutionCallback {
     {
       v8::TryCatch try_catch(isolate);
       context_bridge::ObjectCache object_cache;
-      maybe_result = PassValueToOtherContext(result->CreationContext(),
-                                             promise_.GetContext(), result,
-                                             &object_cache, false, 0);
+      maybe_result = PassValueToOtherContext(
+          result->GetCreationContextChecked(), promise_.GetContext(), result,
+          &object_cache, false, 0);
       if (maybe_result.IsEmpty() || try_catch.HasCaught()) {
         success = false;
       }
@@ -206,7 +206,7 @@ class ScriptExecutionCallback : public blink::WebScriptExecutionCallback {
         bool should_clone_value =
             !(value->IsObject() &&
               promise_.GetContext() ==
-                  value.As<v8::Object>()->CreationContext()) &&
+                  value.As<v8::Object>()->GetCreationContextChecked()) &&
             value->IsObject();
         if (should_clone_value) {
           CopyResultToCallingContextAndFinalize(isolate,
@@ -453,10 +453,11 @@ class WebFrameRenderer : public gin::Wrappable<WebFrameRenderer>,
     if (!MaybeGetRenderFrame(isolate, "setZoomLevel", &render_frame))
       return;
 
-    mojo::Remote<mojom::ElectronBrowser> browser_remote;
-    render_frame->GetBrowserInterfaceBroker()->GetInterface(
-        browser_remote.BindNewPipeAndPassReceiver());
-    browser_remote->SetTemporaryZoomLevel(level);
+    mojo::AssociatedRemote<mojom::ElectronWebContentsUtility>
+        web_contents_utility_remote;
+    render_frame->GetRemoteAssociatedInterfaces()->GetInterface(
+        &web_contents_utility_remote);
+    web_contents_utility_remote->SetTemporaryZoomLevel(level);
   }
 
   double GetZoomLevel(v8::Isolate* isolate) {
@@ -465,10 +466,11 @@ class WebFrameRenderer : public gin::Wrappable<WebFrameRenderer>,
     if (!MaybeGetRenderFrame(isolate, "getZoomLevel", &render_frame))
       return result;
 
-    mojo::Remote<mojom::ElectronBrowser> browser_remote;
-    render_frame->GetBrowserInterfaceBroker()->GetInterface(
-        browser_remote.BindNewPipeAndPassReceiver());
-    browser_remote->DoGetZoomLevel(&result);
+    mojo::AssociatedRemote<mojom::ElectronWebContentsUtility>
+        web_contents_utility_remote;
+    render_frame->GetRemoteAssociatedInterfaces()->GetInterface(
+        &web_contents_utility_remote);
+    web_contents_utility_remote->DoGetZoomLevel(&result);
     return result;
   }
 
@@ -496,10 +498,15 @@ class WebFrameRenderer : public gin::Wrappable<WebFrameRenderer>,
 
     if (pref_name == options::kPreloadScripts) {
       return gin::ConvertToV8(isolate, prefs.preloads);
-    } else if (pref_name == options::kOpenerID) {
-      // NOTE: openerId is internal-only.
-      return gin::ConvertToV8(isolate, prefs.opener_id);
     } else if (pref_name == "isWebView") {
+      // FIXME(zcbenz): For child windows opened with window.open('') from
+      // webview, the WebPreferences is inherited from webview and the value
+      // of |is_webview| is wrong.
+      // Please check ElectronRenderFrameObserver::DidInstallConditionalFeatures
+      // for the background.
+      auto* web_frame = render_frame->GetWebFrame();
+      if (web_frame->Opener())
+        return gin::ConvertToV8(isolate, false);
       return gin::ConvertToV8(isolate, prefs.is_webview);
     } else if (pref_name == options::kHiddenPage) {
       // NOTE: hiddenPage is internal-only.
@@ -508,8 +515,6 @@ class WebFrameRenderer : public gin::Wrappable<WebFrameRenderer>,
       return gin::ConvertToV8(isolate, prefs.offscreen);
     } else if (pref_name == options::kPreloadScript) {
       return gin::ConvertToV8(isolate, prefs.preload.value());
-    } else if (pref_name == options::kNativeWindowOpen) {
-      return gin::ConvertToV8(isolate, prefs.native_window_open);
     } else if (pref_name == options::kNodeIntegration) {
       return gin::ConvertToV8(isolate, prefs.node_integration);
     } else if (pref_name == options::kNodeIntegrationInWorker) {
@@ -608,8 +613,7 @@ class WebFrameRenderer : public gin::Wrappable<WebFrameRenderer>,
   std::u16string InsertCSS(v8::Isolate* isolate,
                            const std::string& css,
                            gin::Arguments* args) {
-    blink::WebDocument::CSSOrigin css_origin =
-        blink::WebDocument::CSSOrigin::kAuthorOrigin;
+    blink::WebCssOrigin css_origin = blink::WebCssOrigin::kAuthor;
 
     gin_helper::Dictionary options;
     if (args->GetNext(&options))
@@ -680,7 +684,8 @@ class WebFrameRenderer : public gin::Wrappable<WebFrameRenderer>,
         has_user_gesture, blink::WebLocalFrame::kSynchronous,
         new ScriptExecutionCallback(std::move(promise),
                                     std::move(completion_callback)),
-        blink::BackForwardCacheAware::kAllow);
+        blink::BackForwardCacheAware::kAllow,
+        blink::WebLocalFrame::PromiseBehavior::kDontWait);
 
     return handle;
   }
@@ -719,9 +724,7 @@ class WebFrameRenderer : public gin::Wrappable<WebFrameRenderer>,
     for (const auto& script : scripts) {
       std::u16string code;
       std::u16string url;
-      int start_line = 1;
       script.Get("url", &url);
-      script.Get("startLine", &start_line);
 
       if (!script.Get("code", &code)) {
         const char error_message[] = "Invalid 'code'";
@@ -737,7 +740,7 @@ class WebFrameRenderer : public gin::Wrappable<WebFrameRenderer>,
       }
 
       sources.emplace_back(blink::WebString::FromUTF16(code),
-                           blink::WebURL(GURL(url)), start_line);
+                           blink::WebURL(GURL(url)));
     }
 
     render_frame->GetWebFrame()->RequestExecuteScript(
@@ -745,7 +748,8 @@ class WebFrameRenderer : public gin::Wrappable<WebFrameRenderer>,
         scriptExecutionType,
         new ScriptExecutionCallback(std::move(promise),
                                     std::move(completion_callback)),
-        blink::BackForwardCacheAware::kPossiblyDisallow);
+        blink::BackForwardCacheAware::kPossiblyDisallow,
+        blink::WebLocalFrame::PromiseBehavior::kDontWait);
 
     return handle;
   }

@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_UTILITY_ELECTRON_CONTENT_UTILITY_CLIENT_H_
-#define SHELL_UTILITY_ELECTRON_CONTENT_UTILITY_CLIENT_H_
+#ifndef ELECTRON_SHELL_UTILITY_ELECTRON_CONTENT_UTILITY_CLIENT_H_
+#define ELECTRON_SHELL_UTILITY_ELECTRON_CONTENT_UTILITY_CLIENT_H_
 
 #include <memory>
 
@@ -11,10 +11,6 @@
 #include "content/public/utility/content_utility_client.h"
 #include "mojo/public/cpp/bindings/binder_map.h"
 #include "printing/buildflags/buildflags.h"
-
-namespace printing {
-class PrintingHandler;
-}
 
 namespace mojo {
 class ServiceFactory;
@@ -37,14 +33,10 @@ class ElectronContentUtilityClient : public content::ContentUtilityClient {
   void RegisterIOThreadServices(mojo::ServiceFactory& services) override;
 
  private:
-#if BUILDFLAG(ENABLE_PRINT_PREVIEW) && defined(OS_WIN)
-  std::unique_ptr<printing::PrintingHandler> printing_handler_;
-#endif
-
   // True if the utility process runs with elevated privileges.
   bool utility_process_running_elevated_ = false;
 };
 
 }  // namespace electron
 
-#endif  // SHELL_UTILITY_ELECTRON_CONTENT_UTILITY_CLIENT_H_
+#endif  // ELECTRON_SHELL_UTILITY_ELECTRON_CONTENT_UTILITY_CLIENT_H_

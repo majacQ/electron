@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_API_ELECTRON_API_BROWSER_WINDOW_H_
-#define SHELL_BROWSER_API_ELECTRON_API_BROWSER_WINDOW_H_
+#ifndef ELECTRON_SHELL_BROWSER_API_ELECTRON_API_BROWSER_WINDOW_H_
+#define ELECTRON_SHELL_BROWSER_API_ELECTRON_API_BROWSER_WINDOW_H_
 
 #include <string>
 #include <vector>
@@ -99,9 +99,13 @@ class BrowserWindow : public BaseWindow,
   void BlurWebView();
   bool IsWebViewFocused();
   v8::Local<v8::Value> GetWebContents(v8::Isolate* isolate);
+#if BUILDFLAG(IS_WIN)
+  void SetTitleBarOverlay(const gin_helper::Dictionary& options,
+                          gin_helper::Arguments* args);
+#endif
 
  private:
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   void OverrideNSWindowContentView(InspectableWebContentsView* webView);
 #endif
 
@@ -133,4 +137,4 @@ class BrowserWindow : public BaseWindow,
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_API_ELECTRON_API_BROWSER_WINDOW_H_
+#endif  // ELECTRON_SHELL_BROWSER_API_ELECTRON_API_BROWSER_WINDOW_H_

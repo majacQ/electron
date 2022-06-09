@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_FILE_SELECT_HELPER_H_
-#define SHELL_BROWSER_FILE_SELECT_HELPER_H_
+#ifndef ELECTRON_SHELL_BROWSER_FILE_SELECT_HELPER_H_
+#define ELECTRON_SHELL_BROWSER_FILE_SELECT_HELPER_H_
 
 #include <map>
 #include <memory>
@@ -129,7 +129,7 @@ class FileSelectHelper : public base::RefCountedThreadSafe<
   // callback is received from the enumeration code.
   void EnumerateDirectoryEnd();
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
   // Must be called from a MayBlock() task. Each selected file that is a package
   // will be zipped, and the zip will be passed to the render view host in place
   // of the package.
@@ -145,7 +145,7 @@ class FileSelectHelper : public base::RefCountedThreadSafe<
   // temporary destination, if the zip was successful. Otherwise returns an
   // empty path.
   static base::FilePath ZipPackage(const base::FilePath& path);
-#endif  // defined(OS_MAC)
+#endif  // BUILDFLAG(IS_MAC)
 
   void ConvertToFileChooserFileInfoList(
       const std::vector<ui::SelectedFileInfo>& files);
@@ -229,4 +229,4 @@ class FileSelectHelper : public base::RefCountedThreadSafe<
   std::vector<base::FilePath> temporary_files_;
 };
 
-#endif  // SHELL_BROWSER_FILE_SELECT_HELPER_H_
+#endif  // ELECTRON_SHELL_BROWSER_FILE_SELECT_HELPER_H_

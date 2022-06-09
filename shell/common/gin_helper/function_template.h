@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE.chromium file.
 
-#ifndef SHELL_COMMON_GIN_HELPER_FUNCTION_TEMPLATE_H_
-#define SHELL_COMMON_GIN_HELPER_FUNCTION_TEMPLATE_H_
+#ifndef ELECTRON_SHELL_COMMON_GIN_HELPER_FUNCTION_TEMPLATE_H_
+#define ELECTRON_SHELL_COMMON_GIN_HELPER_FUNCTION_TEMPLATE_H_
 
 #include <utility>
 
@@ -208,7 +208,7 @@ class Invoker<IndicesHolder<indices...>, ArgTypes...>
     // GCC thinks that create_flags is going unused, even though the
     // expansion above clearly makes use of it. Per jyasskin@, casting
     // to void is the commonly accepted way to convince the compiler
-    // that you're actually using a parameter/varible.
+    // that you're actually using a parameter/variable.
     (void)create_flags;
   }
 
@@ -329,4 +329,4 @@ struct CallbackTraits<
 
 }  // namespace gin_helper
 
-#endif  // SHELL_COMMON_GIN_HELPER_FUNCTION_TEMPLATE_H_
+#endif  // ELECTRON_SHELL_COMMON_GIN_HELPER_FUNCTION_TEMPLATE_H_

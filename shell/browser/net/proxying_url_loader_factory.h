@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_NET_PROXYING_URL_LOADER_FACTORY_H_
-#define SHELL_BROWSER_NET_PROXYING_URL_LOADER_FACTORY_H_
+#ifndef ELECTRON_SHELL_BROWSER_NET_PROXYING_URL_LOADER_FACTORY_H_
+#define ELECTRON_SHELL_BROWSER_NET_PROXYING_URL_LOADER_FACTORY_H_
 
 #include <cstdint>
 #include <map>
@@ -28,6 +28,7 @@
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
+#include "services/network/url_loader_factory.h"
 #include "shell/browser/net/electron_url_loader_factory.h"
 #include "shell/browser/net/web_request_api_interface.h"
 #include "third_party/abseil-cpp/absl/types/optional.h"
@@ -53,7 +54,6 @@ class ProxyingURLLoaderFactory
     InProgressRequest(
         ProxyingURLLoaderFactory* factory,
         uint64_t web_request_id,
-        int32_t view_routing_id,
         int32_t frame_routing_id,
         int32_t network_service_request_id,
         uint32_t options,
@@ -88,7 +88,8 @@ class ProxyingURLLoaderFactory
     // network::mojom::URLLoaderClient:
     void OnReceiveEarlyHints(
         network::mojom::EarlyHintsPtr early_hints) override;
-    void OnReceiveResponse(network::mojom::URLResponseHeadPtr head) override;
+    void OnReceiveResponse(network::mojom::URLResponseHeadPtr head,
+                           mojo::ScopedDataPipeConsumerHandle body) override;
     void OnReceiveRedirect(const net::RedirectInfo& redirect_info,
                            network::mojom::URLResponseHeadPtr head) override;
     void OnUploadProgress(int64_t current_position,
@@ -96,8 +97,6 @@ class ProxyingURLLoaderFactory
                           OnUploadProgressCallback callback) override;
     void OnReceiveCachedMetadata(mojo_base::BigBuffer data) override;
     void OnTransferSizeUpdated(int32_t transfer_size_diff) override;
-    void OnStartLoadingResponseBody(
-        mojo::ScopedDataPipeConsumerHandle body) override;
     void OnComplete(const network::URLLoaderCompletionStatus& status) override;
 
     void OnLoaderCreated(
@@ -134,7 +133,6 @@ class ProxyingURLLoaderFactory
     const absl::optional<url::Origin> original_initiator_;
     const uint64_t request_id_ = 0;
     const int32_t network_service_request_id_ = 0;
-    const int32_t view_routing_id_ = MSG_ROUTING_NONE;
     const int32_t frame_routing_id_ = MSG_ROUTING_NONE;
     const uint32_t options_ = 0;
     const net::MutableNetworkTrafficAnnotationTag traffic_annotation_;
@@ -145,9 +143,10 @@ class ProxyingURLLoaderFactory
 
     mojo::Receiver<network::mojom::URLLoaderClient> proxied_client_receiver_{
         this};
-    network::mojom::URLLoaderPtr target_loader_;
+    mojo::Remote<network::mojom::URLLoader> target_loader_;
 
     network::mojom::URLResponseHeadPtr current_response_;
+    mojo::ScopedDataPipeConsumerHandle current_body_;
     scoped_refptr<net::HttpResponseHeaders> override_headers_;
     GURL redirect_url_;
 
@@ -192,11 +191,10 @@ class ProxyingURLLoaderFactory
       const HandlersMap& intercepted_handlers,
       int render_process_id,
       int frame_routing_id,
-      int view_routing_id,
       uint64_t* request_id_generator,
       std::unique_ptr<extensions::ExtensionNavigationUIData> navigation_ui_data,
       absl::optional<int64_t> navigation_id,
-      network::mojom::URLLoaderFactoryRequest loader_request,
+      mojo::PendingReceiver<network::mojom::URLLoaderFactory> loader_request,
       mojo::PendingRemote<network::mojom::URLLoaderFactory>
           target_factory_remote,
       mojo::PendingReceiver<network::mojom::TrustedURLLoaderHeaderClient>
@@ -257,7 +255,6 @@ class ProxyingURLLoaderFactory
 
   const int render_process_id_;
   const int frame_routing_id_;
-  const int view_routing_id_;
   uint64_t* request_id_generator_;  // managed by ElectronBrowserClient
   std::unique_ptr<extensions::ExtensionNavigationUIData> navigation_ui_data_;
   absl::optional<int64_t> navigation_id_;
@@ -281,4 +278,4 @@ class ProxyingURLLoaderFactory
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_NET_PROXYING_URL_LOADER_FACTORY_H_
+#endif  // ELECTRON_SHELL_BROWSER_NET_PROXYING_URL_LOADER_FACTORY_H_

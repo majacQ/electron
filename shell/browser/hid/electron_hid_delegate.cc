@@ -36,6 +36,7 @@ ElectronHidDelegate::~ElectronHidDelegate() = default;
 std::unique_ptr<content::HidChooser> ElectronHidDelegate::RunChooser(
     content::RenderFrameHost* render_frame_host,
     std::vector<blink::mojom::HidDeviceFilterPtr> filters,
+    std::vector<blink::mojom::HidDeviceFilterPtr> exclusion_filters,
     content::HidChooser::Callback callback) {
   electron::HidChooserContext* chooser_context =
       GetChooserContext(render_frame_host);
@@ -47,7 +48,7 @@ std::unique_ptr<content::HidChooser> ElectronHidDelegate::RunChooser(
     DeleteControllerForFrame(render_frame_host);
   }
   AddControllerForFrame(render_frame_host, std::move(filters),
-                        std::move(callback));
+                        std::move(exclusion_filters), std::move(callback));
 
   // Return a nullptr because the return value isn't used for anything, eg
   // there is no mechanism to cancel navigator.hid.requestDevice(). The return
@@ -74,6 +75,16 @@ bool ElectronHidDelegate::HasDevicePermission(
       render_frame_host->GetMainFrame()->GetLastCommittedOrigin();
   return chooser_context->HasDevicePermission(origin, device,
                                               render_frame_host);
+}
+
+void ElectronHidDelegate::RevokeDevicePermission(
+    content::RenderFrameHost* render_frame_host,
+    const device::mojom::HidDeviceInfo& device) {
+  auto* chooser_context = GetChooserContext(render_frame_host);
+  const auto& origin =
+      render_frame_host->GetMainFrame()->GetLastCommittedOrigin();
+  return chooser_context->RevokeDevicePermission(origin, device,
+                                                 render_frame_host);
 }
 
 device::mojom::HidManager* ElectronHidDelegate::GetHidManager(
@@ -104,7 +115,9 @@ const device::mojom::HidDeviceInfo* ElectronHidDelegate::GetDeviceInfo(
   return chooser_context->GetDeviceInfo(guid);
 }
 
-bool ElectronHidDelegate::IsFidoAllowedForOrigin(const url::Origin& origin) {
+bool ElectronHidDelegate::IsFidoAllowedForOrigin(
+    content::RenderFrameHost* render_frame_host,
+    const url::Origin& origin) {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kDisableHidBlocklist);
 }
@@ -147,12 +160,13 @@ HidChooserController* ElectronHidDelegate::ControllerForFrame(
 HidChooserController* ElectronHidDelegate::AddControllerForFrame(
     content::RenderFrameHost* render_frame_host,
     std::vector<blink::mojom::HidDeviceFilterPtr> filters,
+    std::vector<blink::mojom::HidDeviceFilterPtr> exclusion_filters,
     content::HidChooser::Callback callback) {
   auto* web_contents =
       content::WebContents::FromRenderFrameHost(render_frame_host);
   auto controller = std::make_unique<HidChooserController>(
-      render_frame_host, std::move(filters), std::move(callback), web_contents,
-      weak_factory_.GetWeakPtr());
+      render_frame_host, std::move(filters), std::move(exclusion_filters),
+      std::move(callback), web_contents, weak_factory_.GetWeakPtr());
   controller_map_.insert(
       std::make_pair(render_frame_host, std::move(controller)));
   return ControllerForFrame(render_frame_host);

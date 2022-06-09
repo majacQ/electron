@@ -3,8 +3,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE-CHROMIUM file.
 
-#ifndef SHELL_BROWSER_UI_INSPECTABLE_WEB_CONTENTS_H_
-#define SHELL_BROWSER_UI_INSPECTABLE_WEB_CONTENTS_H_
+#ifndef ELECTRON_SHELL_BROWSER_UI_INSPECTABLE_WEB_CONTENTS_H_
+#define ELECTRON_SHELL_BROWSER_UI_INSPECTABLE_WEB_CONTENTS_H_
 
 #include <list>
 #include <map>
@@ -140,12 +140,15 @@ class InspectableWebContents
                        const std::string& browser_id,
                        const std::string& url) override;
   void RegisterPreference(const std::string& name,
-                          const RegisterOptions& options) override;
+                          const RegisterOptions& options) override {}
   void GetPreferences(DispatchCallback callback) override;
+  void GetPreference(DispatchCallback callback,
+                     const std::string& name) override;
   void SetPreference(const std::string& name,
                      const std::string& value) override;
   void RemovePreference(const std::string& name) override;
   void ClearPreferences() override;
+  void GetSyncInformation(DispatchCallback callback) override;
   void ConnectionReady() override;
   void RegisterExtensionsAPI(const std::string& origin,
                              const std::string& script) override;
@@ -195,9 +198,6 @@ class InspectableWebContents
 
   void SendMessageAck(int request_id, const base::Value* arg1);
 
-  const char* GetDictionaryNameForSettingsName(const std::string& name) const;
-  const char* GetDictionaryNameForSyncedPrefs() const;
-
 #if BUILDFLAG(ENABLE_ELECTRON_EXTENSIONS)
   void AddDevToolsExtensionsToClient();
 #endif
@@ -246,4 +246,4 @@ class InspectableWebContents
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_UI_INSPECTABLE_WEB_CONTENTS_H_
+#endif  // ELECTRON_SHELL_BROWSER_UI_INSPECTABLE_WEB_CONTENTS_H_

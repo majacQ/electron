@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE-CHROMIUM file.
 
-#ifndef SHELL_BROWSER_MEDIA_MEDIA_CAPTURE_DEVICES_DISPATCHER_H_
-#define SHELL_BROWSER_MEDIA_MEDIA_CAPTURE_DEVICES_DISPATCHER_H_
+#ifndef ELECTRON_SHELL_BROWSER_MEDIA_MEDIA_CAPTURE_DEVICES_DISPATCHER_H_
+#define ELECTRON_SHELL_BROWSER_MEDIA_MEDIA_CAPTURE_DEVICES_DISPATCHER_H_
 
 #include <string>
 
@@ -11,6 +11,7 @@
 #include "content/public/browser/media_observer.h"
 #include "content/public/browser/media_stream_request.h"
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
 
 namespace electron {
 
@@ -29,9 +30,10 @@ class MediaCaptureDevicesDispatcher : public content::MediaObserver {
   // If the return list is empty, it means there is no available device on the
   // OS.
   // Called on the UI thread.
-  void GetDefaultDevices(bool audio,
-                         bool video,
-                         blink::MediaStreamDevices* devices);
+  void GetDefaultDevices(
+      bool audio,
+      bool video,
+      blink::mojom::StreamDevices& devices);  // NOLINT(runtime/references)
 
   // Helpers for picking particular requested devices, identified by raw id.
   // If the device requested is not available it will return NULL.
@@ -90,4 +92,4 @@ class MediaCaptureDevicesDispatcher : public content::MediaObserver {
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_MEDIA_MEDIA_CAPTURE_DEVICES_DISPATCHER_H_
+#endif  // ELECTRON_SHELL_BROWSER_MEDIA_MEDIA_CAPTURE_DEVICES_DISPATCHER_H_

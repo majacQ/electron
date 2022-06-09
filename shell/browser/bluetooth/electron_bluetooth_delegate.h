@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_BLUETOOTH_ELECTRON_BLUETOOTH_DELEGATE_H_
-#define SHELL_BROWSER_BLUETOOTH_ELECTRON_BLUETOOTH_DELEGATE_H_
+#ifndef ELECTRON_SHELL_BROWSER_BLUETOOTH_ELECTRON_BLUETOOTH_DELEGATE_H_
+#define ELECTRON_SHELL_BROWSER_BLUETOOTH_ELECTRON_BLUETOOTH_DELEGATE_H_
 
 #include <memory>
 #include <string>
@@ -71,6 +71,9 @@ class ElectronBluetoothDelegate : public content::BluetoothDelegate {
   bool HasDevicePermission(
       content::RenderFrameHost* frame,
       const blink::WebBluetoothDeviceId& device_id) override;
+  void RevokeDevicePermissionWebInitiated(
+      content::RenderFrameHost* frame,
+      const blink::WebBluetoothDeviceId& device_id) override;
   bool IsAllowedToAccessService(content::RenderFrameHost* frame,
                                 const blink::WebBluetoothDeviceId& device_id,
                                 const device::BluetoothUUID& service) override;
@@ -90,4 +93,4 @@ class ElectronBluetoothDelegate : public content::BluetoothDelegate {
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_BLUETOOTH_ELECTRON_BLUETOOTH_DELEGATE_H_
+#endif  // ELECTRON_SHELL_BROWSER_BLUETOOTH_ELECTRON_BLUETOOTH_DELEGATE_H_

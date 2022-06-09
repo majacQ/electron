@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_EXTENSIONS_ELECTRON_MESSAGING_DELEGATE_H_
-#define SHELL_BROWSER_EXTENSIONS_ELECTRON_MESSAGING_DELEGATE_H_
+#ifndef ELECTRON_SHELL_BROWSER_EXTENSIONS_ELECTRON_MESSAGING_DELEGATE_H_
+#define ELECTRON_SHELL_BROWSER_EXTENSIONS_ELECTRON_MESSAGING_DELEGATE_H_
 
 #include <memory>
 #include <string>
@@ -37,7 +37,8 @@ class ElectronMessagingDelegate : public MessagingDelegate {
       const std::string& extension_id,
       const PortId& receiver_port_id,
       content::WebContents* receiver_contents,
-      int receiver_frame_id) override;
+      int receiver_frame_id,
+      const std::string& receiver_document_id) override;
   std::unique_ptr<MessagePort> CreateReceiverForNativeApp(
       content::BrowserContext* browser_context,
       base::WeakPtr<MessagePort::ChannelDelegate> channel_delegate,
@@ -57,4 +58,4 @@ class ElectronMessagingDelegate : public MessagingDelegate {
 
 }  // namespace extensions
 
-#endif  // SHELL_BROWSER_EXTENSIONS_ELECTRON_MESSAGING_DELEGATE_H_
+#endif  // ELECTRON_SHELL_BROWSER_EXTENSIONS_ELECTRON_MESSAGING_DELEGATE_H_

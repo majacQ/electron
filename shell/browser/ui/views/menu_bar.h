@@ -2,8 +2,8 @@
 // Use of this source code is governed by the MIT license that can be
 // found in the LICENSE file.
 
-#ifndef SHELL_BROWSER_UI_VIEWS_MENU_BAR_H_
-#define SHELL_BROWSER_UI_VIEWS_MENU_BAR_H_
+#ifndef ELECTRON_SHELL_BROWSER_UI_VIEWS_MENU_BAR_H_
+#define ELECTRON_SHELL_BROWSER_UI_VIEWS_MENU_BAR_H_
 
 #include "shell/browser/native_window_observer.h"
 #include "shell/browser/ui/electron_menu_model.h"
@@ -79,7 +79,7 @@ class MenuBar : public views::AccessiblePaneView,
   View* FindAccelChild(char16_t key);
 
   SkColor background_color_;
-#if defined(OS_LINUX)
+#if BUILDFLAG(IS_LINUX)
   SkColor enabled_color_;
   SkColor disabled_color_;
 #endif
@@ -92,4 +92,4 @@ class MenuBar : public views::AccessiblePaneView,
 
 }  // namespace electron
 
-#endif  // SHELL_BROWSER_UI_VIEWS_MENU_BAR_H_
+#endif  // ELECTRON_SHELL_BROWSER_UI_VIEWS_MENU_BAR_H_

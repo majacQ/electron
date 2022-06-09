@@ -35,7 +35,7 @@ for all windows, webviews, opened devtools, and devtools extension background pa
 
 ### `webContents.getFocusedWebContents()`
 
-Returns `WebContents` - The web contents that is focused in this application, otherwise
+Returns `WebContents` | null - The web contents that is focused in this application, otherwise
 returns `null`.
 
 ### `webContents.fromId(id)`
@@ -92,7 +92,7 @@ Returns:
 * `frameRoutingId` Integer
 
 This event is like `did-finish-load` but emitted when the load failed.
-The full list of error codes and their meaning is available [here](https://source.chromium.org/chromium/chromium/src/+/master:net/base/net_error_list.h).
+The full list of error codes and their meaning is available [here](https://source.chromium.org/chromium/chromium/src/+/main:net/base/net_error_list.h).
 
 #### Event: 'did-fail-provisional-load'
 
@@ -290,7 +290,7 @@ Returns:
 * `frameProcessId` Integer
 * `frameRoutingId` Integer
 
-Emitted as a server side redirect occurs during navigation.  For example a 302
+Emitted when a server side redirect occurs during navigation.  For example a 302
 redirect.
 
 This event will be emitted after `did-start-navigation` and always before the
@@ -507,6 +507,23 @@ Returns:
 * `zoomDirection` string - Can be `in` or `out`.
 
 Emitted when the user is requesting to change the zoom level using the mouse wheel.
+
+#### Event: 'blur'
+
+Emitted when the `WebContents` loses focus.
+
+#### Event: 'focus'
+
+Emitted when the `WebContents` gains focus.
+
+Note that on macOS, having focus means the `WebContents` is the first responder
+of window, so switching focus between windows would not trigger the `focus` and
+`blur` events of `WebContents`, as the first responder of each window is not
+changed.
+
+The `focus` and `blur` events of `WebContents` should only be used to detect
+focus change between different `WebContents` and `BrowserView` in the same
+window.
 
 #### Event: 'devtools-opened'
 
@@ -736,6 +753,8 @@ first available device will be selected. `callback` should be called with
 `deviceId` to be selected, passing empty string to `callback` will
 cancel the request.
 
+If no event listener is added for this event, all bluetooth requests will be cancelled.
+
 ```javascript
 const { app, BrowserWindow } = require('electron')
 
@@ -800,9 +819,6 @@ contents. Calling `event.preventDefault()` will destroy the guest page.
 This event can be used to configure `webPreferences` for the `webContents`
 of a `<webview>` before it's loaded, and provides the ability to set settings
 that can't be set via `<webview>` attributes.
-
-**Note:** The specified `preload` script option will appear as `preloadURL`
-(not `preload`) in the `webPreferences` object emitted with this event.
 
 #### Event: 'did-attach-webview'
 
@@ -1082,7 +1098,7 @@ Returns `string` - The user agent for this web page.
 
 * `css` string
 * `options` Object (optional)
-  * `cssOrigin` string (optional) - Can be either 'user' or 'author'; Specifying 'user' enables you to prevent websites from overriding the CSS you insert. Default is 'author'.
+  * `cssOrigin` string (optional) - Can be either 'user' or 'author'. Sets the [cascade origin](https://www.w3.org/TR/css3-cascade/#cascade-origin) of the inserted stylesheet. Default is 'author'.
 
 Returns `Promise<string>` - A promise that resolves with a key for the inserted CSS that can later be used to remove the CSS via `contents.removeInsertedCSS(key)`.
 
@@ -1609,7 +1625,7 @@ app.whenReady().then(() => {
 
 * `options` Object (optional)
   * `mode` string - Opens the devtools with specified dock state, can be
-    `right`, `bottom`, `undocked`, `detach`. Defaults to last used dock state.
+    `left`, `right`, `bottom`, `undocked`, `detach`. Defaults to last used dock state.
     In `undocked` mode it's possible to dock back. In `detach` mode it's not.
   * `activate` boolean (optional) - Whether to bring the opened devtools window
     to the foreground. The default is `true`.
@@ -1837,7 +1853,7 @@ the cursor when dragging.
 
 #### `contents.savePage(fullPath, saveType)`
 
-* `fullPath` string - The full file path.
+* `fullPath` string - The absolute file path.
 * `saveType` string - Specify the save type.
   * `HTMLOnly` - Save only the HTML of the page.
   * `HTMLComplete` - Save complete-html page.

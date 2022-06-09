@@ -63,7 +63,7 @@ declare namespace Electron {
     equal(other: WebContents): boolean;
     browserWindowOptions: BrowserWindowConstructorOptions;
     _windowOpenHandler: ((details: Electron.HandlerDetails) => any) | null;
-    _callWindowOpenHandler(event: any, details: Electron.HandlerDetails): Electron.BrowserWindowConstructorOptions | null;
+    _callWindowOpenHandler(event: any, details: Electron.HandlerDetails): {browserWindowConstructorOptions: Electron.BrowserWindowConstructorOptions | null, outlivesOpener: boolean};
     _setNextChildWebPreferences(prefs: Partial<Electron.BrowserWindowConstructorOptions['webPreferences']> & Pick<Electron.BrowserWindowConstructorOptions, 'backgroundColor'>): void;
     _send(internal: boolean, channel: string, args: any): boolean;
     _sendToFrameInternal(frameId: number | [number, number], channel: string, ...args: any[]): boolean;
@@ -81,7 +81,7 @@ declare namespace Electron {
     attachToIframe(embedderWebContents: Electron.WebContents, embedderFrameId: number): void;
     detachFromOuterFrame(): void;
     setEmbedder(embedder: Electron.WebContents): void;
-    attachParams?: Record<string, any>;
+    attachParams?: { instanceId: number; src: string, opts: LoadURLOptions };
     viewInstanceId: number;
   }
 
@@ -96,9 +96,7 @@ declare namespace Electron {
   }
 
   interface WebPreferences {
-    openerId?: number | null;
     disablePopups?: boolean;
-    preloadURL?: string;
     embedder?: Electron.WebContents;
     type?: 'backgroundPage' | 'window' | 'browserView' | 'remote' | 'webview' | 'offscreen';
   }
