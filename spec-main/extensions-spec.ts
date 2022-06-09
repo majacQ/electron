@@ -7,7 +7,11 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as WebSocket from 'ws';
 import { emittedOnce, emittedNTimes, emittedUntil } from './events-helpers';
+  <<<<<<< disable-flaky-asan-tests
+import { ifdescribe, ifit } from './spec-helpers';
+  =======
 import { ifit } from './spec-helpers';
+  >>>>>>> main
 
 const uuid = require('uuid');
 
@@ -97,7 +101,8 @@ describe('chrome extensions', () => {
     await expect(fetch(w.webContents, `${url}/cors`)).to.not.be.rejectedWith(TypeError);
   });
 
-  it('loads an extension', async () => {
+  // This test often timeouts on ASan.
+  ifit(!process.env.IS_ASAN)('loads an extension', async () => {
     // NB. we have to use a persist: session (i.e. non-OTR) because the
     // extension registry is redirected to the main session. so installing an
     // extension in an in-memory session results in it being installed in the
@@ -480,7 +485,8 @@ describe('chrome extensions', () => {
     });
   });
 
-  describe('devtools extensions', () => {
+  // This test often timeouts on ASan.
+  ifdescribe(!process.env.IS_ASAN)('devtools extensions', () => {
     let showPanelTimeoutId: any = null;
     afterEach(() => {
       if (showPanelTimeoutId) clearTimeout(showPanelTimeoutId);
