@@ -317,7 +317,8 @@ NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
   params.bounds = bounds;
   params.delegate = this;
   params.type = views::Widget::InitParams::TYPE_WINDOW;
-  params.native_widget = new ElectronNativeWidgetMac(this, styleMask, widget());
+  params.native_widget =
+      new ElectronNativeWidgetMac(this, windowType, styleMask, widget());
   widget()->Init(std::move(params));
   SetCanResize(resizable);
   window_ = static_cast<ElectronNSWindow*>(
@@ -353,6 +354,10 @@ NativeWindowMac::NativeWindowMac(const gin_helper::Dictionary& options,
     [window_ setCollectionBehavior:(NSWindowCollectionBehaviorCanJoinAllSpaces |
                                     NSWindowCollectionBehaviorStationary |
                                     NSWindowCollectionBehaviorIgnoresCycle)];
+  }
+
+  if (windowType == "panel") {
+    [window_ setLevel:NSFloatingWindowLevel];
   }
 
   bool focusable;
@@ -479,7 +484,8 @@ void NativeWindowMac::Close() {
   // [window_ performClose:nil], the window won't close properly
   // even after the user has ended the sheet.
   // Ensure it's closed before calling [window_ performClose:nil].
-  SetEnabled(true);
+  if ([window_ attachedSheet])
+    [window_ endSheet:[window_ attachedSheet]];
 
   [window_ performClose:nil];
 
@@ -549,7 +555,8 @@ void NativeWindowMac::Hide() {
   // If a sheet is attached to the window when we call [window_ orderOut:nil],
   // the sheet won't be able to show again on the same window.
   // Ensure it's closed before calling [window_ orderOut:nil].
-  SetEnabled(true);
+  if ([window_ attachedSheet])
+    [window_ endSheet:[window_ attachedSheet]];
 
   if (is_modal() && parent()) {
     [window_ orderOut:nil];
@@ -588,9 +595,18 @@ bool NativeWindowMac::IsEnabled() {
 
 void NativeWindowMac::SetEnabled(bool enable) {
   if (!enable) {
-    [window_ beginSheet:window_
+    NSRect frame = [window_ frame];
+    NSWindow* window =
+        [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, frame.size.width,
+                                                         frame.size.height)
+                                    styleMask:NSWindowStyleMaskTitled
+                                      backing:NSBackingStoreBuffered
+                                        defer:NO];
+    [window setAlphaValue:0.5];
+
+    [window_ beginSheet:window
         completionHandler:^(NSModalResponse returnCode) {
-          NSLog(@"modal enabled");
+          NSLog(@"main window disabled");
           return;
         }];
   } else if ([window_ attachedSheet]) {
@@ -807,6 +823,7 @@ void NativeWindowMac::MoveTop() {
 }
 
 void NativeWindowMac::SetResizable(bool resizable) {
+  ScopedDisableResize disable_resize;
   SetStyleMask(resizable, NSWindowStyleMaskResizable);
   SetCanResize(resizable);
 }
@@ -1144,6 +1161,8 @@ double NativeWindowMac::GetOpacity() {
 
 void NativeWindowMac::SetRepresentedFilename(const std::string& filename) {
   [window_ setRepresentedFilename:base::SysUTF8ToNSString(filename)];
+  if (buttons_proxy_)
+    [buttons_proxy_ redraw];
 }
 
 std::string NativeWindowMac::GetRepresentedFilename() {
@@ -1511,12 +1530,15 @@ void NativeWindowMac::SetVibrancy(const std::string& type) {
 
 void NativeWindowMac::SetWindowButtonVisibility(bool visible) {
   window_button_visibility_ = visible;
-  // The visibility of window buttons are managed by |buttons_proxy_| if the
-  // style is customButtonsOnHover.
-  if (title_bar_style_ == TitleBarStyle::kCustomButtonsOnHover)
+  if (buttons_proxy_) {
+    if (visible)
+      [buttons_proxy_ redraw];
     [buttons_proxy_ setVisible:visible];
-  else
+  }
+
+  if (title_bar_style_ != TitleBarStyle::kCustomButtonsOnHover)
     InternalSetWindowButtonVisibility(visible);
+
   NotifyLayoutWindowControlsOverlay();
 }
 

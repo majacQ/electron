@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as qs from 'querystring';
 import * as http from 'http';
 import { AddressInfo } from 'net';
-import { app, BrowserWindow, BrowserView, dialog, ipcMain, OnBeforeSendHeadersListenerDetails, protocol, screen, webContents, session, WebContents, BrowserWindowConstructorOptions } from 'electron/main';
+import { app, BrowserWindow, BrowserView, dialog, ipcMain, OnBeforeSendHeadersListenerDetails, protocol, screen, webContents, session, WebContents } from 'electron/main';
 
 import { emittedOnce, emittedUntil, emittedNTimes } from './events-helpers';
 import { ifit, ifdescribe, defer, delay } from './spec-helpers';
@@ -1040,7 +1040,7 @@ describe('BrowserWindow module', () => {
         const boundsUpdate = { width: 200 };
         w.setBounds(boundsUpdate as any);
 
-        const expectedBounds = Object.assign(fullBounds, boundsUpdate);
+        const expectedBounds = { ...fullBounds, ...boundsUpdate };
         expectBoundsEqual(w.getBounds(), expectedBounds);
       });
 
@@ -1354,7 +1354,7 @@ describe('BrowserWindow module', () => {
 
           w.setAspectRatio(16 / 11);
 
-          const maximize = emittedOnce(w, 'resize');
+          const maximize = emittedOnce(w, 'maximize');
           w.show();
           w.maximize();
           await maximize;
@@ -1996,6 +1996,42 @@ describe('BrowserWindow module', () => {
       w.setWindowButtonVisibility(false);
       expect(w._getWindowButtonVisibility()).to.equal(false);
     });
+
+    it('correctly updates when entering/exiting fullscreen for hidden style', async () => {
+      const w = new BrowserWindow({ show: false, frame: false, titleBarStyle: 'hidden' });
+      expect(w._getWindowButtonVisibility()).to.equal(true);
+      w.setWindowButtonVisibility(false);
+      expect(w._getWindowButtonVisibility()).to.equal(false);
+
+      const enterFS = emittedOnce(w, 'enter-full-screen');
+      w.setFullScreen(true);
+      await enterFS;
+
+      const leaveFS = emittedOnce(w, 'leave-full-screen');
+      w.setFullScreen(false);
+      await leaveFS;
+
+      w.setWindowButtonVisibility(true);
+      expect(w._getWindowButtonVisibility()).to.equal(true);
+    });
+
+    it('correctly updates when entering/exiting fullscreen for hiddenInset style', async () => {
+      const w = new BrowserWindow({ show: false, frame: false, titleBarStyle: 'hiddenInset' });
+      expect(w._getWindowButtonVisibility()).to.equal(true);
+      w.setWindowButtonVisibility(false);
+      expect(w._getWindowButtonVisibility()).to.equal(false);
+
+      const enterFS = emittedOnce(w, 'enter-full-screen');
+      w.setFullScreen(true);
+      await enterFS;
+
+      const leaveFS = emittedOnce(w, 'leave-full-screen');
+      w.setFullScreen(false);
+      await leaveFS;
+
+      w.setWindowButtonVisibility(true);
+      expect(w._getWindowButtonVisibility()).to.equal(true);
+    });
   });
 
   ifdescribe(process.platform === 'darwin')('BrowserWindow.setVibrancy(type)', () => {
@@ -2027,7 +2063,8 @@ describe('BrowserWindow module', () => {
       }).to.not.throw();
     });
 
-    it('Allows setting a transparent window via CSS', async () => {
+    // TODO(nornagon): disabled due to flakiness.
+    it.skip('Allows setting a transparent window via CSS', async () => {
       const appPath = path.join(__dirname, 'fixtures', 'apps', 'background-color-transparent');
 
       appProcess = childProcess.spawn(process.execPath, [appPath], {
@@ -2390,6 +2427,41 @@ describe('BrowserWindow module', () => {
     ifit(process.platform === 'darwin')('sets Window Control Overlay with hidden inset title bar', async () => {
       await testWindowsOverlay('hiddenInset');
     });
+
+    ifdescribe(process.platform === 'win32')('when an invalid titleBarStyle is initially set', () => {
+      let w: BrowserWindow;
+
+      beforeEach(() => {
+        w = new BrowserWindow({
+          show: false,
+          webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false
+          },
+          titleBarOverlay: {
+            color: '#0000f0',
+            symbolColor: '#ffffff'
+          },
+          titleBarStyle: 'hiddenInset'
+        });
+      });
+
+      afterEach(async () => {
+        await closeAllWindows();
+      });
+
+      it('does not crash changing minimizability ', () => {
+        expect(() => {
+          w.setMinimizable(false);
+        }).to.not.throw();
+      });
+
+      it('does not crash changing maximizability', () => {
+        expect(() => {
+          w.setMaximizable(false);
+        }).to.not.throw();
+      });
+    });
   });
 
   ifdescribe(['win32', 'darwin'].includes(process.platform))('"titleBarOverlay" option', () => {
@@ -2679,7 +2751,7 @@ describe('BrowserWindow module', () => {
         for (const isolatedGlobal of isolated.globals) {
           notIsolatedGlobals.delete(isolatedGlobal);
         }
-        expect([...notIsolatedGlobals]).to.deep.equal([], 'non-isoalted renderer should have no additional globals');
+        expect([...notIsolatedGlobals]).to.deep.equal([], 'non-isolated renderer should have no additional globals');
       });
 
       it('loads the script before other scripts in window', async () => {
@@ -3008,7 +3080,7 @@ describe('BrowserWindow module', () => {
         expect(argv).to.include('--enable-sandbox');
       });
 
-      it('should open windows with the options configured via new-window event listeners', async () => {
+      it('should open windows with the options configured via setWindowOpenHandler handlers', async () => {
         const w = new BrowserWindow({
           show: false,
           webPreferences: {
@@ -3097,30 +3169,6 @@ describe('BrowserWindow module', () => {
           w.loadFile(path.join(__dirname, 'fixtures', 'api', 'sandbox.html'), { search: 'webcontents-events' });
           await done;
         });
-      });
-
-      it('supports calling preventDefault on new-window events', (done) => {
-        const w = new BrowserWindow({
-          show: false,
-          webPreferences: {
-            sandbox: true
-          }
-        });
-        const initialWebContents = webContents.getAllWebContents().map((i) => i.id);
-        w.webContents.once('new-window', (e) => {
-          e.preventDefault();
-          // We need to give it some time so the windows get properly disposed (at least on OSX).
-          setTimeout(() => {
-            const currentWebContents = webContents.getAllWebContents().map((i) => i.id);
-            try {
-              expect(currentWebContents).to.deep.equal(initialWebContents);
-              done();
-            } catch (error) {
-              done(e);
-            }
-          }, 100);
-        });
-        w.loadFile(path.join(fixtures, 'pages', 'window-open.html'));
       });
 
       it('validates process APIs access in sandboxed renderer', async () => {
@@ -3263,17 +3311,22 @@ describe('BrowserWindow module', () => {
         });
         w.webContents.setWindowOpenHandler(() => ({
           action: 'allow',
-          overrideBrowserWindowOptions: { show: false, webPreferences: { contextIsolation: false, webviewTag: true, nodeIntegrationInSubFrames: true } }
+          overrideBrowserWindowOptions: {
+            show: false,
+            webPreferences: {
+              contextIsolation: false,
+              webviewTag: true,
+              nodeIntegrationInSubFrames: true,
+              preload
+            }
+          }
         }));
-        w.webContents.once('new-window', (event, url, frameName, disposition, options) => {
-          options.show = false;
-        });
 
         const webviewLoaded = emittedOnce(ipcMain, 'webview-loaded');
         w.loadFile(path.join(fixtures, 'api', 'new-window-webview.html'));
         await webviewLoaded;
       });
-      it('should open windows with the options configured via new-window event listeners', async () => {
+      it('should open windows with the options configured via setWindowOpenHandler handlers', async () => {
         const preloadPath = path.join(mainFixtures, 'api', 'new-window-preload.js');
         w.webContents.setWindowOpenHandler(() => ({
           action: 'allow',
@@ -3640,94 +3693,6 @@ describe('BrowserWindow module', () => {
       } finally {
         ipcMain.removeAllListeners('pong');
       }
-    });
-  });
-
-  describe('new-window event', () => {
-    afterEach(closeAllWindows);
-
-    it('emits when window.open is called', (done) => {
-      const w = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: true } });
-      w.webContents.once('new-window', (e, url, frameName, disposition, options) => {
-        e.preventDefault();
-        try {
-          expect(url).to.equal('http://host/');
-          expect(frameName).to.equal('host');
-          expect((options as any)['this-is-not-a-standard-feature']).to.equal(true);
-          done();
-        } catch (e) {
-          done(e);
-        }
-      });
-      w.loadFile(path.join(fixtures, 'pages', 'window-open.html'));
-    });
-
-    it('emits when window.open is called with no webPreferences', (done) => {
-      const w = new BrowserWindow({ show: false });
-      w.webContents.once('new-window', function (e, url, frameName, disposition, options) {
-        e.preventDefault();
-        try {
-          expect(url).to.equal('http://host/');
-          expect(frameName).to.equal('host');
-          expect((options as any)['this-is-not-a-standard-feature']).to.equal(true);
-          done();
-        } catch (e) {
-          done(e);
-        }
-      });
-      w.loadFile(path.join(fixtures, 'pages', 'window-open.html'));
-    });
-
-    it('emits when link with target is called', (done) => {
-      const w = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: true } });
-      w.webContents.once('new-window', (e, url, frameName) => {
-        e.preventDefault();
-        try {
-          expect(url).to.equal('http://host/');
-          expect(frameName).to.equal('target');
-          done();
-        } catch (e) {
-          done(e);
-        }
-      });
-      w.loadFile(path.join(fixtures, 'pages', 'target-name.html'));
-    });
-
-    it('includes all properties', async () => {
-      const w = new BrowserWindow({ show: false });
-
-      const p = new Promise<{
-        url: string,
-        frameName: string,
-        disposition: string,
-        options: BrowserWindowConstructorOptions,
-        additionalFeatures: string[],
-        referrer: Electron.Referrer,
-        postBody: Electron.PostBody
-      }>((resolve) => {
-        w.webContents.once('new-window', (e, url, frameName, disposition, options, additionalFeatures, referrer, postBody) => {
-          e.preventDefault();
-          resolve({ url, frameName, disposition, options, additionalFeatures, referrer, postBody });
-        });
-      });
-      w.loadURL(`data:text/html,${encodeURIComponent(`
-        <form target="_blank" method="POST" id="form" action="http://example.com/test">
-          <input type="text" name="post-test-key" value="post-test-value"></input>
-        </form>
-        <script>form.submit()</script>
-      `)}`);
-      const { url, frameName, disposition, options, additionalFeatures, referrer, postBody } = await p;
-      expect(url).to.equal('http://example.com/test');
-      expect(frameName).to.equal('');
-      expect(disposition).to.equal('foreground-tab');
-      expect(options).to.be.an('object').not.null();
-      expect(referrer.policy).to.equal('strict-origin-when-cross-origin');
-      expect(referrer.url).to.equal('');
-      expect(additionalFeatures).to.deep.equal([]);
-      expect(postBody.data).to.have.length(1);
-      expect(postBody.data[0].type).to.equal('rawData');
-      expect((postBody.data[0] as any).bytes).to.deep.equal(Buffer.from('post-test-key=post-test-value'));
-      expect(postBody.contentType).to.equal('application/x-www-form-urlencoded');
     });
   });
 
@@ -4252,6 +4217,14 @@ describe('BrowserWindow module', () => {
 
         await emittedOnce(one, 'closed');
         await createTwo();
+      });
+
+      ifit(process.platform !== 'darwin')('can disable and enable a window', () => {
+        const w = new BrowserWindow({ show: false });
+        w.setEnabled(false);
+        expect(w.isEnabled()).to.be.false('w.isEnabled()');
+        w.setEnabled(true);
+        expect(w.isEnabled()).to.be.true('!w.isEnabled()');
       });
 
       ifit(process.platform !== 'darwin')('disables parent window', () => {
@@ -4869,6 +4842,23 @@ describe('BrowserWindow module', () => {
         await leaveFullScreen;
       });
 
+      it('should be able to load a URL while transitioning to fullscreen', async () => {
+        const w = new BrowserWindow({ fullscreen: true });
+        w.loadFile(path.join(fixtures, 'pages', 'c.html'));
+
+        const load = emittedOnce(w.webContents, 'did-finish-load');
+        const enterFS = emittedOnce(w, 'enter-full-screen');
+
+        await Promise.all([enterFS, load]);
+        expect(w.fullScreen).to.be.true();
+
+        await delay();
+
+        const leaveFullScreen = emittedOnce(w, 'leave-full-screen');
+        w.setFullScreen(false);
+        await leaveFullScreen;
+      });
+
       it('can be changed with setFullScreen method', async () => {
         const w = new BrowserWindow();
         const enterFullScreen = emittedOnce(w, 'enter-full-screen');
@@ -5153,7 +5143,8 @@ describe('BrowserWindow module', () => {
     });
   });
 
-  describe('contextIsolation option with and without sandbox option', () => {
+  // TODO (jkleinsc) renable these tests on mas arm64
+  ifdescribe(!process.mas || process.arch !== 'arm64')('contextIsolation option with and without sandbox option', () => {
     const expectedContextData = {
       preloadContext: {
         preloadProperty: 'number',

@@ -52,9 +52,7 @@ struct Converter<blink::mojom::PageVisibilityState> {
 
 }  // namespace gin
 
-namespace electron {
-
-namespace api {
+namespace electron::api {
 
 typedef std::unordered_map<int, WebFrameMain*> WebFrameMainIdMap;
 
@@ -206,7 +204,7 @@ void WebFrameMain::MaybeSetupMojoConnection() {
 
   // Wait for RenderFrame to be created in renderer before accessing remote.
   if (pending_receiver_ && render_frame_ &&
-      render_frame_->IsRenderFrameCreated()) {
+      render_frame_->IsRenderFrameLive()) {
     render_frame_->GetRemoteInterfaces()->GetInterface(
         std::move(pending_receiver_));
   }
@@ -365,6 +363,18 @@ gin::Handle<WebFrameMain> WebFrameMain::From(v8::Isolate* isolate,
 }
 
 // static
+gin::Handle<WebFrameMain> WebFrameMain::FromOrNull(
+    v8::Isolate* isolate,
+    content::RenderFrameHost* rfh) {
+  if (rfh == nullptr)
+    return gin::Handle<WebFrameMain>();
+  auto* web_frame = FromRenderFrameHost(rfh);
+  if (web_frame)
+    return gin::CreateHandle(isolate, web_frame);
+  return gin::Handle<WebFrameMain>();
+}
+
+// static
 v8::Local<v8::ObjectTemplate> WebFrameMain::FillObjectTemplate(
     v8::Isolate* isolate,
     v8::Local<v8::ObjectTemplate> templ) {
@@ -391,9 +401,7 @@ const char* WebFrameMain::GetTypeName() {
   return "WebFrameMain";
 }
 
-}  // namespace api
-
-}  // namespace electron
+}  // namespace electron::api
 
 namespace {
 
@@ -413,6 +421,20 @@ v8::Local<v8::Value> FromID(gin_helper::ErrorThrower thrower,
   return WebFrameMain::From(thrower.isolate(), rfh).ToV8();
 }
 
+v8::Local<v8::Value> FromIDOrNull(gin_helper::ErrorThrower thrower,
+                                  int render_process_id,
+                                  int render_frame_id) {
+  if (!electron::Browser::Get()->is_ready()) {
+    thrower.ThrowError("WebFrameMain is available only after app ready");
+    return v8::Null(thrower.isolate());
+  }
+
+  auto* rfh =
+      content::RenderFrameHost::FromID(render_process_id, render_frame_id);
+
+  return WebFrameMain::FromOrNull(thrower.isolate(), rfh).ToV8();
+}
+
 void Initialize(v8::Local<v8::Object> exports,
                 v8::Local<v8::Value> unused,
                 v8::Local<v8::Context> context,
@@ -421,6 +443,7 @@ void Initialize(v8::Local<v8::Object> exports,
   gin_helper::Dictionary dict(isolate, exports);
   dict.Set("WebFrameMain", WebFrameMain::GetConstructor(context));
   dict.SetMethod("fromId", &FromID);
+  dict.SetMethod("fromIdOrNull", &FromIDOrNull);
 }
 
 }  // namespace

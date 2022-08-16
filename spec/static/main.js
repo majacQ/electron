@@ -136,7 +136,7 @@ app.whenReady().then(async function () {
     const chosen = dialog.showMessageBox(window, {
       type: 'warning',
       buttons: ['Close', 'Keep Waiting'],
-      message: 'Window is not responsing',
+      message: 'Window is not responding',
       detail: 'The window is not responding. Would you like to force close it or just keep waiting?'
     });
     if (chosen === 0) window.destroy();
@@ -144,39 +144,6 @@ app.whenReady().then(async function () {
   window.webContents.on('crashed', function () {
     console.error('Renderer process crashed');
     process.exit(1);
-  });
-});
-
-ipcMain.on('prevent-next-will-attach-webview', (event) => {
-  event.sender.once('will-attach-webview', event => event.preventDefault());
-});
-
-ipcMain.on('break-next-will-attach-webview', (event, id) => {
-  event.sender.once('will-attach-webview', (event, webPreferences, params) => {
-    params.instanceId = null;
-  });
-});
-
-ipcMain.on('disable-node-on-next-will-attach-webview', (event, id) => {
-  event.sender.once('will-attach-webview', (event, webPreferences, params) => {
-    params.src = `file://${path.join(__dirname, '..', 'fixtures', 'pages', 'c.html')}`;
-    webPreferences.nodeIntegration = false;
-  });
-});
-
-ipcMain.on('disable-preload-on-next-will-attach-webview', (event, id) => {
-  event.sender.once('will-attach-webview', (event, webPreferences, params) => {
-    params.src = `file://${path.join(__dirname, '..', 'fixtures', 'pages', 'webview-stripped-preload.html')}`;
-    delete webPreferences.preload;
-  });
-});
-
-ipcMain.on('handle-uncaught-exception', (event, message) => {
-  suspendListeners(process, 'uncaughtException', (error) => {
-    event.returnValue = error.message;
-  });
-  fs.readFile(__filename, () => {
-    throw new Error(message);
   });
 });
 

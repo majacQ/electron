@@ -4,10 +4,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
 import { BrowserWindow, ipcMain, webContents, session, WebContents, app, BrowserView } from 'electron/main';
-import { clipboard } from 'electron/common';
 import { emittedOnce } from './events-helpers';
 import { closeAllWindows } from './window-helpers';
-import { ifdescribe, ifit, delay, defer } from './spec-helpers';
+import { ifdescribe, delay, defer } from './spec-helpers';
 
 const pdfjs = require('pdfjs-dist');
 const fixturesPath = path.resolve(__dirname, '..', 'spec', 'fixtures');
@@ -179,10 +178,12 @@ describe('webContents module', () => {
       }).to.throw('webContents.print(): Invalid optional callback provided.');
     });
 
-    ifit(process.platform !== 'linux')('throws when an invalid deviceName is passed', () => {
-      expect(() => {
-        w.webContents.print({ deviceName: 'i-am-a-nonexistent-printer' }, () => {});
-      }).to.throw('webContents.print(): Invalid deviceName provided.');
+    it('fails when an invalid deviceName is passed', (done) => {
+      w.webContents.print({ deviceName: 'i-am-a-nonexistent-printer' }, (success, reason) => {
+        expect(success).to.equal(false);
+        expect(reason).to.match(/Invalid deviceName provided/);
+        done();
+      });
     });
 
     it('throws when an invalid pageSize is passed', () => {
@@ -247,7 +248,7 @@ describe('webContents module', () => {
         const result = await w.webContents.executeJavaScript(code);
         expect(result).to.equal(expected);
       });
-      it('resolves the returned promise with the result if the code returns an asyncronous promise', async () => {
+      it('resolves the returned promise with the result if the code returns an asynchronous promise', async () => {
         const result = await w.webContents.executeJavaScript(asyncCode);
         expect(result).to.equal(expected);
       });
@@ -883,7 +884,7 @@ describe('webContents module', () => {
 
   describe('getOSProcessId()', () => {
     afterEach(closeAllWindows);
-    it('returns a valid procress id', async () => {
+    it('returns a valid process id', async () => {
       const w = new BrowserWindow({ show: false });
       expect(w.webContents.getOSProcessId()).to.equal(0);
 
@@ -901,6 +902,12 @@ describe('webContents module', () => {
   });
 
   describe('userAgent APIs', () => {
+    it('is not empty by default', () => {
+      const w = new BrowserWindow({ show: false });
+      const userAgent = w.webContents.getUserAgent();
+      expect(userAgent).to.be.a('string').that.is.not.empty();
+    });
+
     it('can set the user agent (functions)', () => {
       const w = new BrowserWindow({ show: false });
       const userAgent = w.webContents.getUserAgent();
@@ -1904,60 +1911,6 @@ describe('webContents module', () => {
     });
   });
 
-  describe('devtools window', () => {
-    let hasRobotJS = false;
-    try {
-      // We have other tests that check if native modules work, if we fail to require
-      // robotjs let's skip this test to avoid false negatives
-      require('robotjs');
-      hasRobotJS = true;
-    } catch (err) { /* no-op */ }
-
-    afterEach(closeAllWindows);
-
-    // NB. on macOS, this requires that you grant your terminal the ability to
-    // control your computer. Open System Preferences > Security & Privacy >
-    // Privacy > Accessibility and grant your terminal the permission to control
-    // your computer.
-    ifit(hasRobotJS)('can receive and handle menu events', async () => {
-      const w = new BrowserWindow({ show: true, webPreferences: { nodeIntegration: true } });
-      w.loadFile(path.join(fixturesPath, 'pages', 'key-events.html'));
-
-      // Ensure the devtools are loaded
-      w.webContents.closeDevTools();
-      const opened = emittedOnce(w.webContents, 'devtools-opened');
-      w.webContents.openDevTools();
-      await opened;
-      await emittedOnce(w.webContents.devToolsWebContents!, 'did-finish-load');
-      w.webContents.devToolsWebContents!.focus();
-
-      // Focus an input field
-      await w.webContents.devToolsWebContents!.executeJavaScript(`
-        const input = document.createElement('input')
-        document.body.innerHTML = ''
-        document.body.appendChild(input)
-        input.focus()
-      `);
-
-      // Write something to the clipboard
-      clipboard.writeText('test value');
-
-      const pasted = w.webContents.devToolsWebContents!.executeJavaScript(`new Promise(resolve => {
-        document.querySelector('input').addEventListener('paste', (e) => {
-          resolve(e.target.value)
-        })
-      })`);
-
-      // Fake a paste request using robotjs to emulate a REAL keyboard paste event
-      require('robotjs').keyTap('v', process.platform === 'darwin' ? ['command'] : ['control']);
-
-      const val = await pasted;
-
-      // Once we're done expect the paste to have been successful
-      expect(val).to.equal('test value', 'value should eventually become the pasted value');
-    });
-  });
-
   describe('Shared Workers', () => {
     afterEach(closeAllWindows);
 
@@ -2148,27 +2101,5 @@ describe('webContents module', () => {
       expect(params.x).to.be.a('number');
       expect(params.y).to.be.a('number');
     });
-  });
-
-  it('emits a cancelable event before creating a child webcontents', async () => {
-    const w = new BrowserWindow({
-      show: false,
-      webPreferences: {
-        sandbox: true
-      }
-    });
-    w.webContents.on('-will-add-new-contents' as any, (event: any, url: any) => {
-      expect(url).to.equal('about:blank');
-      event.preventDefault();
-    });
-    let wasCalled = false;
-    w.webContents.on('new-window' as any, () => {
-      wasCalled = true;
-    });
-    await w.loadURL('about:blank');
-    await w.webContents.executeJavaScript('window.open(\'about:blank\')');
-    await new Promise((resolve) => { process.nextTick(resolve); });
-    expect(wasCalled).to.equal(false);
-    await closeAllWindows();
   });
 });

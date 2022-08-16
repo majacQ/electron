@@ -28,9 +28,7 @@ namespace gin {
 class Arguments;
 }
 
-namespace electron {
-
-namespace api {
+namespace electron::api {
 
 class WebContents;
 
@@ -44,6 +42,9 @@ class WebFrameMain : public gin::Wrappable<WebFrameMain>,
   static gin::Handle<WebFrameMain> New(v8::Isolate* isolate);
 
   static gin::Handle<WebFrameMain> From(
+      v8::Isolate* isolate,
+      content::RenderFrameHost* render_frame_host);
+  static gin::Handle<WebFrameMain> FromOrNull(
       v8::Isolate* isolate,
       content::RenderFrameHost* render_frame_host);
   static WebFrameMain* FromFrameTreeNodeId(int frame_tree_node_id);
@@ -131,8 +132,6 @@ class WebFrameMain : public gin::Wrappable<WebFrameMain>,
   base::WeakPtrFactory<WebFrameMain> weak_factory_{this};
 };
 
-}  // namespace api
-
-}  // namespace electron
+}  // namespace electron::api
 
 #endif  // ELECTRON_SHELL_BROWSER_API_ELECTRON_API_WEB_FRAME_MAIN_H_

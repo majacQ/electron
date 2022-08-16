@@ -1,74 +1,7 @@
 import { BrowserWindow } from 'electron';
-import { writeFileSync, readFileSync } from 'fs';
-import { resolve } from 'path';
 import { expect, assert } from 'chai';
 import { closeAllWindows } from './window-helpers';
 const { emittedOnce } = require('./events-helpers');
-
-function genSnapshot (browserWindow: BrowserWindow, features: string) {
-  return new Promise((resolve) => {
-    browserWindow.webContents.on('new-window', (...args: any[]) => {
-      resolve([features, ...args]);
-    });
-    browserWindow.webContents.executeJavaScript(`window.open('about:blank', 'frame-name', '${features}') && true`);
-  });
-}
-
-describe('new-window event', () => {
-  const snapshotFileName = 'native-window-open.snapshot.txt';
-  const browserWindowOptions = {
-    show: false,
-    width: 200,
-    title: 'cool',
-    backgroundColor: 'blue',
-    focusable: false,
-    webPreferences: {
-      sandbox: true
-    }
-  };
-
-  const snapshotFile = resolve(__dirname, 'fixtures', 'snapshots', snapshotFileName);
-  let browserWindow: BrowserWindow;
-  let existingSnapshots: any[];
-
-  before(() => {
-    existingSnapshots = parseSnapshots(readFileSync(snapshotFile, { encoding: 'utf8' }));
-  });
-
-  beforeEach((done) => {
-    browserWindow = new BrowserWindow(browserWindowOptions);
-    browserWindow.loadURL('about:blank');
-    browserWindow.on('ready-to-show', () => { done(); });
-  });
-
-  afterEach(closeAllWindows);
-
-  const newSnapshots: any[] = [];
-  [
-    'top=5,left=10,resizable=no',
-    'zoomFactor=2,resizable=0,x=0,y=10',
-    'backgroundColor=gray,webPreferences=0,x=100,y=100',
-    'x=50,y=20,title=sup',
-    'show=false,top=1,left=1'
-  ].forEach((features, index) => {
-    /**
-     * ATTN: If this test is failing, you likely just need to change
-     * `shouldOverwriteSnapshot` to true and then evaluate the snapshot diff
-     * to see if the change is harmless.
-     */
-    it(`matches snapshot for ${features}`, async () => {
-      const newSnapshot = await genSnapshot(browserWindow, features);
-      newSnapshots.push(newSnapshot);
-      // TODO: The output when these fail could be friendlier.
-      expect(stringifySnapshots(newSnapshot)).to.equal(stringifySnapshots(existingSnapshots[index]));
-    });
-  });
-
-  after(() => {
-    const shouldOverwriteSnapshot = false;
-    if (shouldOverwriteSnapshot) writeFileSync(snapshotFile, stringifySnapshots(newSnapshots, true));
-  });
-});
 
 describe('webContents.setWindowOpenHandler', () => {
   let browserWindow: BrowserWindow;
@@ -79,6 +12,50 @@ describe('webContents.setWindowOpenHandler', () => {
 
   afterEach(closeAllWindows);
 
+  it('does not fire window creation events if the handler callback throws an error', (done) => {
+    const error = new Error('oh no');
+    const listeners = process.listeners('uncaughtException');
+    process.removeAllListeners('uncaughtException');
+    process.on('uncaughtException', (thrown) => {
+      try {
+        expect(thrown).to.equal(error);
+        done();
+      } catch (e) {
+        done(e);
+      } finally {
+        process.removeAllListeners('uncaughtException');
+        listeners.forEach((listener) => process.on('uncaughtException', listener));
+      }
+    });
+
+    browserWindow.webContents.on('did-create-window', () => {
+      assert.fail('did-create-window should not be called with an overridden window.open');
+    });
+
+    browserWindow.webContents.executeJavaScript("window.open('about:blank', '', 'show=no') && true");
+
+    browserWindow.webContents.setWindowOpenHandler(() => {
+      throw error;
+    });
+  });
+
+  it('does not fire window creation events if the handler callback returns a bad result', async () => {
+    const bad = new Promise((resolve) => {
+      browserWindow.webContents.setWindowOpenHandler(() => {
+        setTimeout(resolve);
+        return [1, 2, 3] as any;
+      });
+    });
+
+    browserWindow.webContents.on('did-create-window', () => {
+      assert.fail('did-create-window should not be called with an overridden window.open');
+    });
+
+    browserWindow.webContents.executeJavaScript("window.open('about:blank', '', 'show=no') && true");
+
+    await bad;
+  });
+
   it('does not fire window creation events if an override returns action: deny', async () => {
     const denied = new Promise((resolve) => {
       browserWindow.webContents.setWindowOpenHandler(() => {
@@ -86,12 +63,9 @@ describe('webContents.setWindowOpenHandler', () => {
         return { action: 'deny' };
       });
     });
-    browserWindow.webContents.on('new-window', () => {
-      assert.fail('new-window should not to be called with an overridden window.open');
-    });
 
     browserWindow.webContents.on('did-create-window', () => {
-      assert.fail('did-create-window should not to be called with an overridden window.open');
+      assert.fail('did-create-window should not be called with an overridden window.open');
     });
 
     browserWindow.webContents.executeJavaScript("window.open('about:blank', '', 'show=no') && true");
@@ -106,12 +80,9 @@ describe('webContents.setWindowOpenHandler', () => {
         return { action: 'deny' };
       });
     });
-    browserWindow.webContents.on('new-window', () => {
-      assert.fail('new-window should not to be called with an overridden window.open');
-    });
 
     browserWindow.webContents.on('did-create-window', () => {
-      assert.fail('did-create-window should not to be called with an overridden window.open');
+      assert.fail('did-create-window should not be called with an overridden window.open');
     });
 
     await browserWindow.webContents.loadURL('data:text/html,<a target="_blank" href="http://example.com" style="display: block; width: 100%; height: 100%; position: fixed; left: 0; top: 0;">link</a>');
@@ -128,12 +99,9 @@ describe('webContents.setWindowOpenHandler', () => {
         return { action: 'deny' };
       });
     });
-    browserWindow.webContents.on('new-window', () => {
-      assert.fail('new-window should not to be called with an overridden window.open');
-    });
 
     browserWindow.webContents.on('did-create-window', () => {
-      assert.fail('did-create-window should not to be called with an overridden window.open');
+      assert.fail('did-create-window should not be called with an overridden window.open');
     });
 
     await browserWindow.webContents.loadURL('data:text/html,<a href="http://example.com" style="display: block; width: 100%; height: 100%; position: fixed; left: 0; top: 0;">link</a>');
@@ -205,10 +173,7 @@ describe('webContents.setWindowOpenHandler', () => {
       browserWindow.webContents.executeJavaScript("window.open('about:blank', '', 'show=no') && true");
     });
 
-    await Promise.all([
-      emittedOnce(browserWindow.webContents, 'did-create-window'),
-      emittedOnce(browserWindow.webContents, 'new-window')
-    ]);
+    await emittedOnce(browserWindow.webContents, 'did-create-window');
   });
 
   it('can change webPreferences of child windows', (done) => {
@@ -230,22 +195,3 @@ describe('webContents.setWindowOpenHandler', () => {
     expect(await browserWindow.webContents.executeJavaScript('42')).to.equal(42);
   });
 });
-
-function stringifySnapshots (snapshots: any, pretty = false) {
-  return JSON.stringify(snapshots, (key, value) => {
-    if (['sender', 'webContents'].includes(key)) {
-      return '[WebContents]';
-    }
-    if (key === 'processId' && typeof value === 'number') {
-      return 'placeholder-process-id';
-    }
-    if (key === 'returnValue') {
-      return 'placeholder-guest-contents-id';
-    }
-    return value;
-  }, pretty ? 2 : undefined);
-}
-
-function parseSnapshots (snapshotsJson: string) {
-  return JSON.parse(snapshotsJson);
-}
